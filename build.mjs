@@ -3,7 +3,7 @@ import { minify as minifyHtml } from 'html-minifier-terser';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const DIST = 'dist';
+const DIST = 'docs';
 
 await fs.rm(DIST, { recursive: true, force: true });
 await fs.mkdir(DIST, { recursive: true });
