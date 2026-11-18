@@ -3,7 +3,7 @@
 
 A lightweight, serverless peer-to-peer Pong game built with WebRTC and [Trystero](https://github.com/dmotz/trystero). Create a room, share the room code or invite link with a friend, and play directly in the browser.
 
-<img src="https://github.com/ar00n/webrtc-pong/blob/main/example.jpg" width="800" alt="Example">
+<img src="https://github.com/ar00n/webrtc-pong/blob/main/example.png" width="800" alt="Example">
 
 ## Features
 
