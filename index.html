@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>P2P Pong</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      margin: 0; padding: 20px; background: #111; color: #eee;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+    }
+    canvas {
+      background: #000; border: 2px solid #444; max-width: 100%;
+      touch-action: none; border-radius: 4px;
+    }
+    canvas.playing { cursor: none; }
+    .panel {
+      width: 700px; max-width: 100%; background: #1c1c1c;
+      padding: 16px; border-radius: 10px; border: 1px solid #333;
+    }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 8px;
+    }
+    .status-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #666;
+      display: inline-block; flex-shrink: 0;
+    }
+    .dot.waiting { background: #f2c94c; }
+    .dot.connected { background: #27ae60; }
+    .dot.paused { background: #56ccf2; }
+    .dot.error { background: #eb5757; }
+    .ping-badge {
+      font-family: monospace; font-size: 12px; color: #bbb;
+      background: #0c0c0c; border: 1px solid #333;
+      padding: 2px 7px; border-radius: 999px;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+    button {
+      padding: 9px 15px; border: none; border-radius: 6px;
+      background: #2f80ed; color: #fff; font-weight: 600; cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover:not(:disabled) { filter: brightness(1.1); }
+    button.secondary { background: #333; color: #eee; }
+    button.danger { background: #b83232; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    input[type="text"] {
+      padding: 9px 12px; border-radius: 6px; border: 1px solid #444;
+      background: #0c0c0c; color: #fff; font-family: monospace;
+      font-size: 16px; letter-spacing: 2px; text-transform: uppercase;
+      width: 180px;
+    }
+    .code-box {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: #0c0c0c; border: 1px solid #333; border-radius: 8px;
+      padding: 8px 14px; margin-top: 10px; flex-wrap: wrap;
+    }
+    .code-text {
+      font-family: monospace; font-size: 24px; font-weight: 700;
+      letter-spacing: 4px; color: #6fcf97;
+    }
+    .status { font-size: 14px; color: #aaa; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="header">
+      <strong>WebRTC Pong (Room Codes)</strong>
+      <div class="status-wrap">
+        <span id="dot" class="dot"></span>
+        <span id="status" class="status">Host a room or join with a code</span>
+        <span id="pingBadge" class="ping-badge hidden">-- ms</span>
+      </div>
+    </div>
+
+    <!-- Lobby / Role Select -->
+    <div id="lobbyBox">
+      <div class="row">
+        <button id="btnHost">Host Game (Left Paddle)</button>
+        <span class="status">or</span>
+        <input id="joinCodeInput" type="text" maxlength="12" placeholder="CODE" autocomplete="off" />
+        <button id="btnJoin">Join Game</button>
+      </div>
+    </div>
+
+    <!-- Active Room Info -->
+    <div id="roomBox" class="hidden">
+      <div id="inviteArea">
+        <div class="status" style="margin-top: 10px;">Share this room code or invite link with your friend:</div>
+        <div class="code-box">
+          <span id="roomCodeDisplay" class="code-text">-----</span>
+          <button id="btnCopyCode" class="secondary">Copy Code</button>
+          <button id="btnCopyLink">Copy Invite Link</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="btnPause" class="secondary" disabled>Pause (Space)</button>
+        <button id="btnResetScore" class="secondary hidden">Reset Score</button>
+        <button id="btnLeave" class="danger">Leave Room</button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="game" width="700" height="420"></canvas>
+  <div class="status">Controls: Mouse / Touch drag, W/S or Arrow Up &amp; Down, Space to Pause / Resume</div>
+
+  <script type="module">
+    import { joinRoom } from 'https://esm.run/trystero@0.27.0';
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const statusEl = document.getElementById('status');
+    const dotEl = document.getElementById('dot');
+    const pingBadge = document.getElementById('pingBadge');
+    const lobbyBox = document.getElementById('lobbyBox');
+    const roomBox = document.getElementById('roomBox');
+    const inviteArea = document.getElementById('inviteArea');
+    const joinCodeInput = document.getElementById('joinCodeInput');
+    const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+    const btnHost = document.getElementById('btnHost');
+    const btnJoin = document.getElementById('btnJoin');
+    const btnCopyCode = document.getElementById('btnCopyCode');
+    const btnCopyLink = document.getElementById('btnCopyLink');
+    const btnPause = document.getElementById('btnPause');
+    const btnResetScore = document.getElementById('btnResetScore');
+    const btnLeave = document.getElementById('btnLeave');
+
+    const APP_ID = 'webrtc-pong-v1:' + location.origin + location.pathname.replace(/\/index\.html$/, '/');
+    const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    const HEARTBEAT_INTERVAL_MS = 500;
+    const CONNECTION_TIMEOUT_MS = 2500;
+
+    let room = null;
+    let syncAction = null;
+    let currentCode = '';
+    let myUserId = '';
+    let remoteUserId = null;
+    let isHost = false;
+    let connected = false;
+    let matchActive = false;
+
+    // Pause & Connection Health
+    let paused = false;
+    let pauseReason = ''; // '' | 'manual' | 'lost' | 'reconnected'
+    let pausedBy = '';
+    let connectionLost = false;
+    let lastRemoteMsgTime = 0;
+
+    // Networking & Sync
+    let sendSeq = 0;
+    let recvSeq = -1;
+    let lastPaddleSend = 0;
+    let lastSentPaddleY = null;
+    let pingInterval = null;
+    let halfRtt = 0.025; // seconds, smoothed via ping/pong
+
+    // Authority & Smoothing
+    let currentRound = 0;
+    let hitSeq = 0;
+    let lastHitSeq = 0;
+    let ballOwner = 'h'; // 'h' when moving left, 'g' when moving right
+    let waitingForServe = false;
+    let visErrX = 0;
+    let visErrY = 0;
+
+    // Game Constants & State
+    const PADDLE_MARGIN = 20;
+    const PADDLE_W = 12, PADDLE_H = 80, BALL_R = 7;
+    const LEFT_FACE = PADDLE_MARGIN + PADDLE_W;       // 32
+    const RIGHT_FACE = W - PADDLE_MARGIN - PADDLE_W;  // W - 32
+    const MAX_SUBSTEP = 1 / 120;
+
+    const state = {
+      hy: H / 2 - PADDLE_H / 2,
+      gy: H / 2 - PADDLE_H / 2,
+      bx: W / 2, by: H / 2,
+      vx: 310, vy: 190,
+      hs: 0, gs: 0,
+      serveTimer: 0
+    };
+    const keys = { up: false, down: false };
+
+    function setStatus(msg, mode = '') {
+      statusEl.textContent = msg;
+      dotEl.className = 'dot' + (mode ? ' ' + mode : '');
+    }
+
+    function generateCode(len = 5) {
+      let out = '';
+      const arr = new Uint8Array(len);
+      crypto.getRandomValues(arr);
+      for (let i = 0; i < len; i++) out += CODE_CHARS[arr[i] % CODE_CHARS.length];
+      return out;
+    }
+
+    function normalizeCode(raw) {
+      return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+    }
+
+    function getInviteUrl(code) {
+      const url = new URL(location.href);
+      url.searchParams.set('room', code);
+      return url.toString();
+    }
+
+    function sendMsg(payload) {
+      if (!syncAction || !connected) return;
+      syncAction.send({ ...payload, seq: ++sendSeq }).catch(() => {});
+    }
+
+    function sendServe() {
+      sendMsg({
+        t: 'serve',
+        round: currentRound,
+        bx: state.bx,
+        by: state.by,
+        vx: state.vx,
+        vy: state.vy,
+        hs: state.hs,
+        gs: state.gs,
+        st: state.serveTimer
+      });
+    }
+
+    function sendSyncState() {
+      if (!isHost || !connected) return;
+      sendMsg({
+        t: 'syncState',
+        round: currentRound,
+        hitSeq,
+        owner: ballOwner,
+        bx: state.bx,
+        by: state.by,
+        vx: state.vx,
+        vy: state.vy,
+        st: state.serveTimer,
+        hs: state.hs,
+        gs: state.gs,
+        hy: state.hy,
+        paused,
+        pauseReason,
+        pausedBy
+      });
+    }
+
+    function resetBall(dir) {
+      currentRound++;
+      hitSeq = 0;
+      lastHitSeq = 0;
+      visErrX = 0;
+      visErrY = 0;
+      waitingForServe = false;
+
+      state.bx = W / 2;
+      state.by = H / 2;
+      const angle = Math.random() * 0.6 - 0.3;
+      const speed = 340;
+      state.vx = Math.cos(angle) * speed * dir;
+      state.vy = Math.sin(angle) * speed;
+      state.serveTimer = 0.65;
+      ballOwner = dir < 0 ? 'h' : 'g';
+
+      if (isHost && connected) sendServe();
+    }
+
+    function resetMatch() {
+      paused = false;
+      pauseReason = '';
+      pausedBy = '';
+      state.hy = H / 2 - PADDLE_H / 2;
+      state.gy = H / 2 - PADDLE_H / 2;
+      state.hs = 0;
+      state.gs = 0;
+      resetBall(Math.random() < 0.5 ? 1 : -1);
+      updateRoleUI();
+    }
+
+    // Single sub-step with swept paddle collision so the ball can never tunnel
+    function stepBallSubstep(dt) {
+      const prevBx = state.bx;
+      const prevBy = state.by;
+
+      state.bx += state.vx * dt;
+      state.by += state.vy * dt;
+
+      if (state.by - BALL_R < 0) {
+        state.by = BALL_R;
+        state.vy *= -1;
+      } else if (state.by + BALL_R > H) {
+        state.by = H - BALL_R;
+        state.vy *= -1;
+      }
+
+      // Left paddle swept collision
+      if (state.vx < 0 && prevBx - BALL_R >= LEFT_FACE - 2 && state.bx - BALL_R <= LEFT_FACE) {
+        const dx = state.bx - prevBx;
+        const frac = dx !== 0 ? Math.max(0, Math.min(1, ((LEFT_FACE + BALL_R) - prevBx) / dx)) : 0;
+        const impactY = prevBy + (state.by - prevBy) * frac;
+        if (impactY >= state.hy - BALL_R && impactY <= state.hy + PADDLE_H + BALL_R) {
+          const hit = Math.max(-1, Math.min(1, (impactY - (state.hy + PADDLE_H / 2)) / (PADDLE_H / 2)));
+          const speed = Math.min(Math.hypot(state.vx, state.vy) * 1.05, 720);
+          const ang = hit * 0.9;
+          state.vx = Math.cos(ang) * speed;
+          state.vy = Math.sin(ang) * speed;
+          state.bx = LEFT_FACE + BALL_R;
+          state.by = Math.max(BALL_R, Math.min(H - BALL_R, impactY));
+          return 'hit-left';
+        }
+      }
+
+      // Right paddle swept collision
+      if (state.vx > 0 && prevBx + BALL_R <= RIGHT_FACE + 2 && state.bx + BALL_R >= RIGHT_FACE) {
+        const dx = state.bx - prevBx;
+        const frac = dx !== 0 ? Math.max(0, Math.min(1, ((RIGHT_FACE - BALL_R) - prevBx) / dx)) : 0;
+        const impactY = prevBy + (state.by - prevBy) * frac;
+        if (impactY >= state.gy - BALL_R && impactY <= state.gy + PADDLE_H + BALL_R) {
+          const hit = Math.max(-1, Math.min(1, (impactY - (state.gy + PADDLE_H / 2)) / (PADDLE_H / 2)));
+          const speed = Math.min(Math.hypot(state.vx, state.vy) * 1.05, 720);
+          const ang = hit * 0.9;
+          state.vx = -Math.cos(ang) * speed;
+          state.vy = Math.sin(ang) * speed;
+          state.bx = RIGHT_FACE - BALL_R;
+          state.by = Math.max(BALL_R, Math.min(H - BALL_R, impactY));
+          return 'hit-right';
+        }
+      }
+
+      if (state.bx + BALL_R < 0) return 'miss-left';
+      if (state.bx - BALL_R > W) return 'miss-right';
+      return null;
+    }
+
+    // Advance ball forward by `duration` (used to compensate half-RTT on incoming events)
+    function advanceBallVisual(duration) {
+      let rem = Math.min(Math.max(duration, 0), 0.18);
+      while (rem > 1e-6) {
+        const sub = Math.min(rem, MAX_SUBSTEP);
+        rem -= sub;
+        state.bx += state.vx * sub;
+        state.by += state.vy * sub;
+        if (state.by - BALL_R < 0) { state.by = BALL_R; state.vy *= -1; }
+        if (state.by + BALL_R > H) { state.by = H - BALL_R; state.vy *= -1; }
+      }
+    }
+
+    function startPingLoop() {
+      stopPingLoop();
+      if (!isHost) return;
+      const sendPing = () => {
+        if (syncAction && connected) {
+          syncAction.send({ t: 'ping', ts: performance.now(), hrtt: halfRtt }).catch(() => {});
+        }
+      };
+      sendPing();
+      pingInterval = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+    }
+
+    function stopPingLoop() {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+    }
+
+    function updateRoleUI() {
+      const canPlay = connected && !paused && !connectionLost && matchActive;
+      canvas.classList.toggle('playing', canPlay);
+
+      btnResetScore.classList.toggle('hidden', !connected || !isHost);
+      inviteArea.classList.toggle('hidden', !room || !isHost);
+
+      btnPause.disabled = !connected || connectionLost || !matchActive;
+      btnPause.textContent = paused ? 'Resume (Space)' : 'Pause (Space)';
+
+      if (connected && !connectionLost) {
+        pingBadge.classList.remove('hidden');
+        pingBadge.textContent = `${Math.round(halfRtt * 2000)} ms`;
+      } else {
+        pingBadge.classList.add('hidden');
+      }
+
+      if (!room) {
+        setStatus('Host a room or join with a code');
+        return;
+      }
+
+      if (connectionLost) {
+        const offlineMsg = !navigator.onLine ? 'You are offline' : 'Connection lost';
+        setStatus(`${offlineMsg} — Game paused. Waiting in ${currentCode}...`, 'error');
+      } else if (!connected) {
+        setStatus(
+          isHost ? `Waiting for friend to join ${currentCode}...` : `Connecting to room ${currentCode}...`,
+          'waiting'
+        );
+      } else if (paused) {
+        const reasonText = pauseReason === 'reconnected'
+          ? 'Connection restored — Press Space to resume'
+          : `Paused by ${pausedBy || 'player'} — Press Space to resume`;
+        setStatus(`${currentCode} — ${reasonText}`, 'paused');
+      } else {
+        setStatus(
+          `Connected in ${currentCode} — You are ${isHost ? 'Left Paddle (Host)' : 'Right Paddle (Guest)'}`,
+          'connected'
+        );
+      }
+    }
+
+    function triggerConnectionLostPause() {
+      if (connectionLost) return;
+      connectionLost = true;
+      if (matchActive) {
+        paused = true;
+        pauseReason = 'lost';
+        pausedBy = '';
+      }
+      keys.up = false;
+      keys.down = false;
+      updateRoleUI();
+    }
+
+    function togglePause() {
+      if (!connected || connectionLost || !matchActive) return;
+
+      const nextPaused = !paused;
+      paused = nextPaused;
+      pauseReason = nextPaused ? 'manual' : '';
+      pausedBy = nextPaused ? (isHost ? 'Host' : 'Guest') : '';
+
+      sendMsg({
+        t: 'pause',
+        paused: nextPaused,
+        reason: pauseReason,
+        by: pausedBy
+      });
+
+      // Host broadcasts authoritative state on unpause so both sides stay perfectly synced
+      if (!nextPaused && isHost) {
+        sendSyncState();
+      }
+
+      updateRoleUI();
+    }
+
+    async function leaveCurrentRoom() {
+      stopPingLoop();
+      connected = false;
+      matchActive = false;
+      connectionLost = false;
+      paused = false;
+      pauseReason = '';
+      pausedBy = '';
+      remoteUserId = null;
+      recvSeq = -1;
+      sendSeq = 0;
+      currentRound = 0;
+      hitSeq = 0;
+      lastHitSeq = 0;
+      lastSentPaddleY = null;
+      waitingForServe = false;
+      visErrX = 0;
+      visErrY = 0;
+
+      if (room) {
+        try { await room.leave(); } catch {}
+        room = null;
+        syncAction = null;
+      }
+
+      roomBox.classList.add('hidden');
+      lobbyBox.classList.remove('hidden');
+      updateRoleUI();
+    }
+
+    async function enterRoom(code, hostMode) {
+      await leaveCurrentRoom();
+
+      currentCode = code;
+      isHost = hostMode;
+      roomCodeDisplay.textContent = code;
+      lobbyBox.classList.add('hidden');
+      roomBox.classList.remove('hidden');
+      updateRoleUI();
+
+      room = joinRoom({ appId: APP_ID, maxUsers: 2, identity: 'none' }, code);
+      const self = await room.getSelf();
+      myUserId = self.userId;
+
+      syncAction = room.makeAction('sync');
+
+      room.onUserJoin(({ userId }) => {
+        if (remoteUserId && remoteUserId !== userId) return;
+        remoteUserId = userId;
+        connected = true;
+        connectionLost = false;
+        lastRemoteMsgTime = performance.now();
+        recvSeq = -1;
+        sendSeq = 0;
+        halfRtt = 0.025;
+
+        if (!matchActive) {
+          matchActive = true;
+          waitingForServe = !isHost;
+          if (isHost) {
+            resetMatch();
+            startPingLoop();
+          }
+        } else {
+          // Peer reconnected mid-match: keep scores & pause safely
+          paused = true;
+          pauseReason = 'reconnected';
+          pausedBy = '';
+          waitingForServe = !isHost;
+          if (isHost) {
+            startPingLoop();
+          }
+        }
+
+        syncAction.send({ t: 'hello', host: isHost }).catch(() => {});
+        updateRoleUI();
+      });
+
+      room.onUserLeave(({ userId }) => {
+        if (userId !== remoteUserId) return;
+        stopPingLoop();
+        remoteUserId = null;
+        connected = false;
+        waitingForServe = false;
+        triggerConnectionLostPause();
+      });
+
+      room.onError((err) => {
+        if (err.code === 'room-full' && Object.keys(room.getPeers()).length === 0) {
+          setStatus(`Room ${code} is already full (2/2 players).`, 'error');
+        } else if (err.code === 'peer-connect-failed') {
+          setStatus('Direct WebRTC connection failed (strict NAT/firewall).', 'error');
+        } else if (err.code === 'relay-failed') {
+          setStatus('Could not reach signaling relays. Check your internet.', 'error');
+        }
+      });
+
+      syncAction.onMessage((msg, { userId }) => {
+        if (!remoteUserId) remoteUserId = userId;
+        lastRemoteMsgTime = performance.now();
+
+        // Recover from silent heartbeat drop without full disconnect
+        if (connectionLost && connected) {
+          connectionLost = false;
+          if (matchActive) {
+            paused = true;
+            pauseReason = 'reconnected';
+            pausedBy = '';
+          }
+          if (isHost && matchActive) {
+            sendSyncState();
+          }
+          updateRoleUI();
+        }
+
+        if (msg.t === 'hello') {
+          const wasHost = isHost;
+          if (msg.host === isHost) {
+            isHost = myUserId < userId;
+          }
+          connected = true;
+          connectionLost = false;
+
+          if (isHost && !wasHost) {
+            startPingLoop();
+            if (!matchActive) {
+              matchActive = true;
+              resetMatch();
+            } else {
+              sendSyncState();
+            }
+          } else if (!isHost && wasHost) {
+            stopPingLoop();
+          } else if (isHost && matchActive && paused) {
+            // Re-send saved match state to rejoining Guest
+            sendSyncState();
+          }
+
+          updateRoleUI();
+          return;
+        }
+
+        if (msg.t === 'ping') {
+          if (!isHost) {
+            if (typeof msg.hrtt === 'number') halfRtt = msg.hrtt;
+            syncAction.send({ t: 'pong', ts: msg.ts }).catch(() => {});
+            updateRoleUI();
+          }
+          return;
+        }
+
+        if (msg.t === 'pong') {
+          if (isHost && typeof msg.ts === 'number') {
+            const sample = Math.min(Math.max((performance.now() - msg.ts) / 2000, 0), 0.15);
+            halfRtt = halfRtt * 0.7 + sample * 0.3;
+            pingBadge.textContent = `${Math.round(halfRtt * 2000)} ms`;
+          }
+          return;
+        }
+
+        if (typeof msg.seq !== 'number' || msg.seq <= recvSeq) return;
+        recvSeq = msg.seq;
+
+        if (msg.t === 'p') {
+          if (isHost) state.gy = msg.y;
+          else state.hy = msg.y;
+          return;
+        }
+
+        if (msg.t === 'pause') {
+          paused = !!msg.paused;
+          pauseReason = paused ? (msg.reason || 'manual') : '';
+          pausedBy = paused ? (msg.by || '') : '';
+          if (!paused && isHost) {
+            sendSyncState();
+          }
+          updateRoleUI();
+          return;
+        }
+
+        if (msg.t === 'syncState' && !isHost) {
+          currentRound = msg.round;
+          hitSeq = msg.hitSeq;
+          lastHitSeq = msg.hitSeq;
+          ballOwner = msg.owner;
+          state.bx = msg.bx;
+          state.by = msg.by;
+          state.vx = msg.vx;
+          state.vy = msg.vy;
+          state.serveTimer = msg.st;
+          state.hs = msg.hs;
+          state.gs = msg.gs;
+          state.hy = msg.hy;
+          waitingForServe = false;
+          visErrX = 0;
+          visErrY = 0;
+
+          if (typeof msg.paused === 'boolean') {
+            paused = msg.paused;
+            pauseReason = msg.pauseReason || '';
+            pausedBy = msg.pausedBy || '';
+          }
+
+          if (!paused && !connectionLost) {
+            if (state.serveTimer > halfRtt) {
+              state.serveTimer -= halfRtt;
+            } else if (state.serveTimer > 0) {
+              const rem = halfRtt - state.serveTimer;
+              state.serveTimer = 0;
+              advanceBallVisual(rem);
+            } else {
+              advanceBallVisual(halfRtt);
+            }
+          }
+          updateRoleUI();
+          return;
+        }
+
+        if (msg.t === 'serve' && !isHost) {
+          currentRound = msg.round;
+          lastHitSeq = 0;
+          waitingForServe = false;
+          visErrX = 0;
+          visErrY = 0;
+          if (!connectionLost) {
+            paused = false;
+            pauseReason = '';
+            pausedBy = '';
+          }
+
+          state.bx = msg.bx;
+          state.by = msg.by;
+          state.vx = msg.vx;
+          state.vy = msg.vy;
+          state.hs = msg.hs;
+          state.gs = msg.gs;
+          ballOwner = state.vx < 0 ? 'h' : 'g';
+
+          // Offset serveTimer by halfRtt so both sides launch at the same physical moment
+          if (msg.st > halfRtt) {
+            state.serveTimer = msg.st - halfRtt;
+          } else {
+            state.serveTimer = 0;
+            advanceBallVisual(halfRtt - msg.st);
+          }
+          updateRoleUI();
+          return;
+        }
+
+        if (msg.t === 'hit') {
+          if (msg.round !== currentRound || msg.hitSeq <= lastHitSeq) return;
+          lastHitSeq = msg.hitSeq;
+          hitSeq = msg.hitSeq;
+
+          const oldBx = state.bx;
+          const oldBy = state.by;
+
+          state.bx = msg.bx;
+          state.by = msg.by;
+          state.vx = msg.vx;
+          state.vy = msg.vy;
+          state.serveTimer = 0;
+          ballOwner = msg.vx < 0 ? 'h' : 'g';
+
+          advanceBallVisual(halfRtt);
+
+          const errX = oldBx - state.bx;
+          const errY = oldBy - state.by;
+          if (Math.hypot(errX, errY) < 140) {
+            visErrX = errX;
+            visErrY = errY;
+          } else {
+            visErrX = 0;
+            visErrY = 0;
+          }
+          return;
+        }
+
+        if (msg.t === 'miss' && isHost) {
+          if (msg.round !== currentRound) return;
+          state.hs++;
+          resetBall(-1);
+        }
+      });
+    }
+
+    // Lobby & Room UI handlers
+    btnHost.onclick = (e) => {
+      e.currentTarget.blur();
+      enterRoom(generateCode(), true);
+    };
+
+    function handleJoin() {
+      const code = normalizeCode(joinCodeInput.value);
+      if (code.length < 3) {
+        alert('Please enter a valid room code (at least 3 characters).');
+        joinCodeInput.focus();
+        return;
+      }
+      joinCodeInput.value = code;
+      joinCodeInput.blur();
+      enterRoom(code, false);
+    }
+
+    btnJoin.onclick = (e) => {
+      e.currentTarget.blur();
+      handleJoin();
+    };
+    joinCodeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleJoin();
+    });
+
+    btnPause.onclick = (e) => {
+      e.currentTarget.blur();
+      togglePause();
+    };
+
+    btnLeave.onclick = (e) => {
+      e.currentTarget.blur();
+      leaveCurrentRoom();
+    };
+
+    btnResetScore.onclick = (e) => {
+      e.currentTarget.blur();
+      if (isHost && connected && !connectionLost) resetMatch();
+    };
+
+    function flashCopied(btn, label) {
+      const orig = btn.textContent;
+      btn.textContent = label;
+      setTimeout(() => { btn.textContent = orig; }, 1400);
+    }
+
+    btnCopyCode.onclick = async (e) => {
+      e.currentTarget.blur();
+      try {
+        await navigator.clipboard.writeText(currentCode);
+        flashCopied(btnCopyCode, 'Copied!');
+      } catch {}
+    };
+
+    btnCopyLink.onclick = async (e) => {
+      e.currentTarget.blur();
+      try {
+        await navigator.clipboard.writeText(getInviteUrl(currentCode));
+        flashCopied(btnCopyLink, 'Link Copied!');
+      } catch {}
+    };
+
+    // Browser online/offline detection
+    window.addEventListener('offline', () => {
+      if (room && matchActive) {
+        triggerConnectionLostPause();
+      }
+    });
+    window.addEventListener('online', () => {
+      updateRoleUI();
+    });
+
+    // Auto-join if opened with ?room=CODE
+    const urlCode = normalizeCode(new URLSearchParams(location.search).get('room') || '');
+    if (urlCode.length >= 3) {
+      joinCodeInput.value = urlCode;
+      enterRoom(urlCode, false);
+    }
+
+    // Input handling
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement === joinCodeInput) return;
+
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        if (!e.repeat) togglePause();
+        return;
+      }
+
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') keys.up = true;
+      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') keys.down = true;
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') keys.up = false;
+      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') keys.down = false;
+    });
+    window.addEventListener('blur', () => {
+      keys.up = false;
+      keys.down = false;
+    });
+
+    function movePointerPaddle(e) {
+      if (room && (!connected || paused || connectionLost)) return;
+      const rect = canvas.getBoundingClientRect();
+      const y = (e.clientY - rect.top) * (H / rect.height) - PADDLE_H / 2;
+      const clamped = Math.max(0, Math.min(H - PADDLE_H, y));
+      if (isHost || !room) state.hy = clamped;
+      else state.gy = clamped;
+    }
+    canvas.addEventListener('pointerdown', movePointerPaddle);
+    canvas.addEventListener('pointermove', movePointerPaddle);
+
+    function drawOverlay(title, subtitle, accentColor = '#fff') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = accentColor;
+      ctx.font = 'bold 28px system-ui, sans-serif';
+      ctx.fillText(title, W / 2, H / 2 - 10);
+
+      if (subtitle) {
+        ctx.fillStyle = '#ccc';
+        ctx.font = '15px system-ui, sans-serif';
+        ctx.fillText(subtitle, W / 2, H / 2 + 22);
+      }
+    }
+
+    // Game loop
+    let lastTime = performance.now();
+    function loop(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      // Heartbeat timeout detection for silent network drops
+      if (connected && matchActive && !connectionLost && (now - lastRemoteMsgTime > CONNECTION_TIMEOUT_MS)) {
+        triggerConnectionLostPause();
+      }
+
+      const activePlay = connected && !paused && !connectionLost && matchActive;
+
+      if (activePlay) {
+        const move = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+        if (move !== 0) {
+          if (isHost) state.hy = Math.max(0, Math.min(H - PADDLE_H, state.hy + move * 420 * dt));
+          else state.gy = Math.max(0, Math.min(H - PADDLE_H, state.gy + move * 420 * dt));
+        }
+
+        // Decay visual correction smoothly
+        const decay = Math.exp(-22 * dt);
+        visErrX *= decay;
+        visErrY *= decay;
+
+        // Send local paddle position (~60Hz when moving, 10Hz heartbeat)
+        const myY = Math.round(isHost ? state.hy : state.gy);
+        if (now - lastPaddleSend >= 16 && (myY !== lastSentPaddleY || now - lastPaddleSend >= 100)) {
+          lastPaddleSend = now;
+          lastSentPaddleY = myY;
+          sendMsg({ t: 'p', y: myY });
+        }
+
+        if (!waitingForServe) {
+          if (state.serveTimer > 0) {
+            state.serveTimer = Math.max(0, state.serveTimer - dt);
+          } else {
+            let rem = dt;
+            while (rem > 1e-6) {
+              const sub = Math.min(rem, MAX_SUBSTEP);
+              rem -= sub;
+
+              const ev = stepBallSubstep(sub);
+
+              if (ev === 'hit-left') {
+                // Only Host has authority over left-paddle bounces
+                if (isHost && ballOwner === 'h') {
+                  ballOwner = 'g';
+                  hitSeq++;
+                  lastHitSeq = hitSeq;
+                  sendMsg({
+                    t: 'hit',
+                    round: currentRound,
+                    hitSeq,
+                    bx: state.bx,
+                    by: state.by,
+                    vx: state.vx,
+                    vy: state.vy
+                  });
+                }
+              } else if (ev === 'hit-right') {
+                // Only Guest has authority over right-paddle bounces
+                if (!isHost && ballOwner === 'g') {
+                  ballOwner = 'h';
+                  hitSeq++;
+                  lastHitSeq = hitSeq;
+                  sendMsg({
+                    t: 'hit',
+                    round: currentRound,
+                    hitSeq,
+                    bx: state.bx,
+                    by: state.by,
+                    vx: state.vx,
+                    vy: state.vy
+                  });
+                }
+              } else if (ev === 'miss-left') {
+                if (isHost && ballOwner === 'h') {
+                  state.gs++;
+                  resetBall(1);
+                  break;
+                }
+              } else if (ev === 'miss-right') {
+                if (!isHost && ballOwner === 'g') {
+                  waitingForServe = true;
+                  sendMsg({ t: 'miss', round: currentRound });
+                  break;
+                }
+              }
+            }
+
+            // Safety fallback if Guest freezes/drops a miss packet
+            if (isHost && ballOwner === 'g' && state.bx > W + BALL_R + 180) {
+              state.hs++;
+              resetBall(-1);
+            }
+          }
+        }
+      }
+
+      // Render
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = '#333';
+      ctx.setLineDash([8, 8]);
+      ctx.beginPath();
+      ctx.moveTo(W / 2, 0);
+      ctx.lineTo(W / 2, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 36px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(state.hs, W * 0.25, 48);
+      ctx.fillText(state.gs, W * 0.75, 48);
+
+      if (room) {
+        ctx.fillStyle = '#555';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.fillText('YOU', isHost ? W * 0.25 : W * 0.75, 68);
+      }
+
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(PADDLE_MARGIN, state.hy, PADDLE_W, PADDLE_H);
+      ctx.fillRect(W - PADDLE_MARGIN - PADDLE_W, state.gy, PADDLE_W, PADDLE_H);
+
+      const drawBx = state.bx + visErrX;
+      const drawBy = Math.max(BALL_R, Math.min(H - BALL_R, state.by + visErrY));
+      ctx.beginPath();
+      ctx.arc(drawBx, drawBy, BALL_R, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Status Overlays
+      if (!room) {
+        drawOverlay('P2P PONG', 'Host a game or enter a room code above');
+      } else if (connectionLost) {
+        drawOverlay(
+          'CONNECTION LOST — GAME PAUSED',
+          !navigator.onLine ? 'You are offline. Waiting for internet...' : 'Waiting for opponent to reconnect...',
+          '#eb5757'
+        );
+      } else if (!connected) {
+        drawOverlay(
+          isHost ? `ROOM CODE: ${currentCode}` : `JOINING ${currentCode}...`,
+          isHost ? 'Waiting for your friend to join...' : 'Establishing peer-to-peer connection...',
+          '#f2c94c'
+        );
+      } else if (paused) {
+        const sub = pauseReason === 'reconnected'
+          ? 'Connection restored — Press SPACE to resume'
+          : `Paused by ${pausedBy || 'player'} — Press SPACE to resume`;
+        drawOverlay('PAUSED', sub, '#56ccf2');
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
