@@ -1,5 +1,6 @@
 import { AUDIO_CONFIG } from '../config/constants.js';
 import { safeGetStorageItem, safeSetStorageItem } from '../utils/storage.js';
+import { createDefaultWinSoundFramework } from './WinSoundFramework.js';
 
 export class AudioEngine {
   #ctx = null;
@@ -9,12 +10,17 @@ export class AudioEngine {
   #lastSoundedRound = -1;
   #lastSoundedSeq = -1;
 
+  #winSoundFramework = createDefaultWinSoundFramework();
+  #selectedWinSoundId = AUDIO_CONFIG.DEFAULT_WIN_SOUND;
+
   constructor() {
     const savedVol = Number(safeGetStorageItem(AUDIO_CONFIG.STORAGE_VOL_KEY));
     if (!Number.isNaN(savedVol) && savedVol >= 0 && savedVol <= 100) {
       this.#volumePct = Math.round(savedVol);
     }
     this.#isMuted = safeGetStorageItem(AUDIO_CONFIG.STORAGE_MUTE_KEY) === 'true';
+
+    this.#loadSavedWinSound();
   }
 
   get volumePct() {
@@ -27,6 +33,23 @@ export class AudioEngine {
 
   get isEffectivelyMuted() {
     return this.#isMuted || this.#volumePct <= 0;
+  }
+
+  get winSoundFramework() {
+    return this.#winSoundFramework;
+  }
+
+  get winSounds() {
+    return this.#winSoundFramework.list();
+  }
+
+  get selectedWinSoundId() {
+    return this.#selectedWinSoundId;
+  }
+
+  registerWinSound(definition) {
+    this.#winSoundFramework.register(definition);
+    return this;
   }
 
   unlock() {
@@ -60,6 +83,30 @@ export class AudioEngine {
       this.#isMuted = false;
     }
     this.#persistAndApply();
+  }
+
+  setWinSound(id) {
+    if (!this.#winSoundFramework.has(id)) return false;
+
+    this.#selectedWinSoundId = id;
+    safeSetStorageItem(AUDIO_CONFIG.STORAGE_WIN_SOUND_KEY, id);
+    return true;
+  }
+
+  async previewWinSound() {
+    if (this.isEffectivelyMuted) return false;
+    const ac = this.unlock();
+    if (!ac) return false;
+
+    if (ac.state === 'suspended') {
+      try {
+        await ac.resume();
+      } catch {
+        return false;
+      }
+    }
+
+    return this.playMatchWin();
   }
 
   resetHitDeduplication() {
@@ -112,6 +159,30 @@ export class AudioEngine {
     }
   }
 
+  playMatchWin(soundId = this.#selectedWinSoundId) {
+    if (this.isEffectivelyMuted) return false;
+    const ac = this.unlock();
+    if (!ac || ac.state !== 'running') return false;
+
+    const targetId =
+      typeof soundId === 'string' && this.#winSoundFramework.has(soundId)
+        ? soundId
+        : this.#selectedWinSoundId;
+
+    const synth = this.#createSynthApi(ac);
+    return this.#winSoundFramework.play(
+      targetId,
+      synth,
+      AUDIO_CONFIG.DEFAULT_WIN_SOUND
+    );
+  }
+
+  playMatchLose() {
+    this.#playTone({ freq: 392.0, duration: 0.12, type: 'sawtooth', gain: 0.16, delay: 0 });
+    this.#playTone({ freq: 311.13, duration: 0.14, type: 'sawtooth', gain: 0.16, delay: 0.11 });
+    this.#playTone({ freq: 261.63, duration: 0.28, type: 'sawtooth', gain: 0.16, delay: 0.24 });
+  }
+
   playPause(isPaused) {
     if (isPaused) {
       this.#playTone({ freq: 380, endFreq: 260, duration: 0.07, type: 'triangle', gain: 0.2 });
@@ -128,6 +199,32 @@ export class AudioEngine {
   playDisconnect() {
     this.#playTone({ freq: 260, duration: 0.1, type: 'triangle', gain: 0.24, delay: 0 });
     this.#playTone({ freq: 185, duration: 0.16, type: 'triangle', gain: 0.24, delay: 0.1 });
+  }
+
+  #createSynthApi(ac) {
+    return {
+      ctx: ac,
+      destination: this.#masterGain,
+      tone: (opts) => this.#playTone(opts),
+      sequence: (notes, defaults = {}) => {
+        for (const note of notes) {
+          this.#playTone({ ...defaults, ...note });
+        }
+      },
+      chord: (freqs, opts = {}) => {
+        const { gain = 0.14, ...rest } = opts;
+        for (const freq of freqs) {
+          this.#playTone({ ...rest, freq, gain });
+        }
+      }
+    };
+  }
+
+  #loadSavedWinSound() {
+    const savedId = safeGetStorageItem(AUDIO_CONFIG.STORAGE_WIN_SOUND_KEY);
+    if (savedId && this.#winSoundFramework.has(savedId)) {
+      this.#selectedWinSoundId = savedId;
+    }
   }
 
   #getEffectiveGain() {
@@ -149,10 +246,11 @@ export class AudioEngine {
 
   #playTone({ freq, endFreq = null, duration = 0.08, type = 'square', gain = 0.3, delay = 0 }) {
     if (this.isEffectivelyMuted) return;
+    if (!(duration > 0) || !Number.isFinite(freq)) return;
     const ac = this.unlock();
     if (!ac || ac.state !== 'running') return;
 
-    const t0 = ac.currentTime + delay;
+    const t0 = ac.currentTime + Math.max(0, delay);
     const t1 = t0 + duration;
 
     const osc = ac.createOscillator();
@@ -160,7 +258,7 @@ export class AudioEngine {
 
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t0);
-    if (endFreq !== null) {
+    if (endFreq !== null && Number.isFinite(endFreq)) {
       osc.frequency.exponentialRampToValueAtTime(Math.max(20, endFreq), t1);
     }
 

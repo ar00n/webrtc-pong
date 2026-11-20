@@ -121,20 +121,141 @@
         </div>
       </div>
 
-      <!-- Audio Controls -->
+      <!-- Match Mode & Difficulty Settings -->
+      <div class="settings-bar">
+        <div id="hostSettingsControls" class="settings-controls">
+          <label class="inline-field">
+            <span class="field-label">Difficulty</span>
+            <select id="difficultySelect" aria-label="Difficulty">
+              <option value="easy">Easy</option>
+              <option value="normal">Normal</option>
+              <option value="hard">Hard</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+
+          <label class="inline-field">
+            <span class="field-label">Mode</span>
+            <select id="modeSelect" aria-label="Game mode">
+              <option value="first-to">First to X</option>
+              <option value="win-by-2">Win by 2</option>
+              <option value="timed">Timed</option>
+              <option value="endless">Endless</option>
+            </select>
+          </label>
+
+          <label id="targetScoreWrap" class="inline-field">
+            <span class="field-label">Points</span>
+            <input
+              id="targetScoreInput"
+              type="number"
+              min="1"
+              max="99"
+              step="1"
+              value="7"
+              aria-label="Target points"
+            />
+          </label>
+
+          <label id="timeLimitWrap" class="inline-field hidden">
+            <span class="field-label">Time</span>
+            <select id="timeLimitSelect" aria-label="Match duration">
+              <option value="30">0:30</option>
+              <option value="60">1:00</option>
+              <option value="120">2:00</option>
+              <option value="180">3:00</option>
+              <option value="300">5:00</option>
+              <option value="600">10:00</option>
+            </select>
+          </label>
+
+          <span id="difficultySpec" class="spec-text"></span>
+        </div>
+
+        <div id="customDifficultyRow" class="custom-diff-row hidden">
+          <label class="inline-field">
+            <span class="field-label">Serve Speed</span>
+            <input
+              id="customInitialSpeedInput"
+              type="number"
+              min="200"
+              max="600"
+              step="10"
+              value="340"
+              aria-label="Custom serve speed"
+            />
+          </label>
+          <label class="inline-field">
+            <span class="field-label">Max Speed</span>
+            <input
+              id="customMaxSpeedInput"
+              type="number"
+              min="450"
+              max="1600"
+              step="20"
+              value="1000"
+              aria-label="Custom max ball speed"
+            />
+          </label>
+          <label class="inline-field">
+            <span class="field-label">Multiplier</span>
+            <input
+              id="customMultiplierInput"
+              type="number"
+              min="1.00"
+              max="1.20"
+              step="0.01"
+              value="1.05"
+              aria-label="Custom speed multiplier"
+            />
+          </label>
+        </div>
+
+        <div id="guestSettingsBanner" class="rules-badge hidden">
+          Match Rules: <strong id="guestRulesSummary">Normal • First to 7</strong>
+        </div>
+      </div>
+
+      <!-- Paddle Colour Selector -->
+      <div class="paddle-bar">
+        <span class="field-label">Paddle Colour</span>
+        <div
+          id="paddleColorPalette"
+          class="color-palette"
+          role="group"
+          aria-label="Select paddle colour"
+        ></div>
+        <span id="opponentColorBadge" class="opponent-color hidden">
+          Opponent:
+          <span id="opponentColorDot" class="opponent-dot" aria-hidden="true"></span>
+          <span id="opponentColorName">Classic White</span>
+        </span>
+      </div>
+
+      <!-- Audio & Win Sound Controls -->
       <div class="audio-bar">
-        <button id="btnMute" type="button" class="secondary small" title="Toggle Mute (M)">
-          Sound: On (M)
-        </button>
-        <input
-          id="volumeSlider"
-          type="range"
-          min="0"
-          max="100"
-          value="70"
-          aria-label="Volume"
-        />
-        <span id="volumeValue" class="vol-text">70%</span>
+        <div class="audio-group">
+          <button id="btnMute" type="button" class="secondary small" title="Toggle Mute (M)">
+            Sound: On (M)
+          </button>
+          <input
+            id="volumeSlider"
+            type="range"
+            min="0"
+            max="100"
+            value="70"
+            aria-label="Volume"
+          />
+          <span id="volumeValue" class="vol-text">70%</span>
+        </div>
+
+        <div class="win-sound-controls">
+          <label class="inline-field">
+            <span class="field-label">Win Sound</span>
+            <select id="winSoundSelect" aria-label="Win sound selection"></select>
+          </label>
+          <button id="btnPreviewWinSound" type="button" class="secondary small">Preview</button>
+        </div>
       </div>
     </section>
 

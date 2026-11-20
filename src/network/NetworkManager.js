@@ -77,7 +77,9 @@ export class NetworkManager extends EventEmitter {
     this.#syncAction = room.makeAction('sync');
 
     room.onUserJoin(({ userId }) => {
-      if (this.#remoteUserId && this.#remoteUserId !== userId) return;
+      if (this.#remoteUserId && this.#remoteUserId !== userId && !this.#connectionLost) {
+        return;
+      }
 
       this.#remoteUserId = userId;
       this.#connected = true;
@@ -87,7 +89,7 @@ export class NetworkManager extends EventEmitter {
       this.#sendSeq = 0;
       this.#halfRtt = NETWORK_CONFIG.DEFAULT_HALF_RTT;
 
-      this.sendRaw(MSG_TYPE.HELLO, { host: this.#isHost });
+      this.sendRaw(MSG_TYPE.HELLO, { host: this.#isHost, seq: this.#sendSeq });
       this.emit('peer-join', { userId });
     });
 
@@ -239,8 +241,10 @@ export class NetworkManager extends EventEmitter {
     }
 
     if (msg.t === MSG_TYPE.HELLO) {
+      this.#remoteUserId = userId;
       this.#connected = true;
       this.#connectionLost = false;
+      this.#recvSeq = typeof msg.seq === 'number' ? msg.seq : -1;
     }
 
     this.emit('message', { msg, userId });

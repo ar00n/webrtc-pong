@@ -1,10 +1,13 @@
 import { GAME_CONFIG } from '../config/constants.js';
 import { isEditableElement } from '../utils/dom.js';
 
+const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label';
+
 export class InputController {
   #canvas;
   #handlers;
   #keys = { up: false, down: false };
+  #pointerOnControl = false;
   #abortController = new AbortController();
 
   constructor(canvas, handlers) {
@@ -24,6 +27,13 @@ export class InputController {
 
   destroy() {
     this.#abortController.abort();
+  }
+
+  #isControlTarget(target) {
+    return (
+      target instanceof Element &&
+      (isEditableElement(target) || Boolean(target.closest(INTERACTIVE_SELECTOR)))
+    );
   }
 
   #bindEvents() {
@@ -63,19 +73,37 @@ export class InputController {
 
     window.addEventListener('blur', () => {
       this.resetKeys();
+      this.#pointerOnControl = false;
     }, { signal });
 
+    const clearControlDrag = () => {
+      this.#pointerOnControl = false;
+    };
+    window.addEventListener('pointerup', clearControlDrag, { signal });
+    window.addEventListener('pointercancel', clearControlDrag, { signal });
+
     const handlePointer = (e) => {
+      const onControl = this.#isControlTarget(e.target);
+
       if (e.type === 'pointerdown') {
+        this.#pointerOnControl = onControl;
+        if (onControl) return;
         this.#handlers.onUserGesture?.();
+      } else if (this.#pointerOnControl || onControl) {
+        return;
       }
+
       const rect = this.#canvas.getBoundingClientRect();
       if (rect.height <= 0) return;
-      const y = (e.clientY - rect.top) * (GAME_CONFIG.HEIGHT / rect.height) - GAME_CONFIG.PADDLE_HEIGHT / 2;
+
+      const rawY =
+        (e.clientY - rect.top) * (GAME_CONFIG.HEIGHT / rect.height) - GAME_CONFIG.PADDLE_HEIGHT / 2;
+      const y = Math.max(0, Math.min(GAME_CONFIG.HEIGHT - GAME_CONFIG.PADDLE_HEIGHT, rawY));
+
       this.#handlers.onPointerMove?.(y);
     };
 
-    this.#canvas.addEventListener('pointerdown', handlePointer, { signal });
-    this.#canvas.addEventListener('pointermove', handlePointer, { signal });
+    window.addEventListener('pointerdown', handlePointer, { signal });
+    window.addEventListener('pointermove', handlePointer, { signal });
   }
 }

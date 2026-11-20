@@ -7,7 +7,6 @@ function clamp(min, max, val) {
 export class PhysicsEngine {
   /**
    * Advances the ball simulation by `dt` using fixed sub-steps to prevent tunneling.
-   * Returns an object summarizing events that occurred during the frame.
    */
   step(state, dt, callbacks = {}) {
     if (state.waitingForServe) return;
@@ -127,9 +126,12 @@ export class PhysicsEngine {
 
     const halfPaddle = GAME_CONFIG.PADDLE_HEIGHT / 2;
     const hitOffset = clamp(-1, 1, (impactY - (paddleY + halfPaddle)) / halfPaddle);
+
+    const speedMultiplier = state.settings?.speedMultiplier ?? GAME_CONFIG.SPEED_MULTIPLIER;
+    const maxBallSpeed = state.settings?.maxBallSpeed ?? GAME_CONFIG.MAX_BALL_SPEED;
     const speed = Math.min(
-      Math.hypot(state.vx, state.vy) * GAME_CONFIG.SPEED_MULTIPLIER,
-      GAME_CONFIG.MAX_BALL_SPEED
+      Math.hypot(state.vx, state.vy) * speedMultiplier,
+      maxBallSpeed
     );
     const angle = hitOffset * GAME_CONFIG.MAX_BOUNCE_ANGLE;
 

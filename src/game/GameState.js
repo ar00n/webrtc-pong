@@ -1,4 +1,5 @@
-import { GAME_CONFIG } from '../config/constants.js';
+import { GAME_CONFIG, MATCH_MODES } from '../config/constants.js';
+import { createDefaultMatchSettings, normalizeMatchSettings } from './MatchSettings.js';
 
 export class GameState {
   // Entities & scores
@@ -14,6 +15,11 @@ export class GameState {
 
   // Match & authority tracking
   matchActive = false;
+  matchOver = false;
+  winner = null; // null | 'host' | 'guest'
+  timeRemaining = 0;
+  settings = createDefaultMatchSettings();
+
   paused = false;
   pauseReason = ''; // '' | 'manual' | 'lost' | 'reconnected'
   pausedBy = '';
@@ -33,7 +39,18 @@ export class GameState {
   }
 
   static clampPaddleY(y) {
+    if (!Number.isFinite(y)) return 0;
     return Math.max(0, Math.min(GAME_CONFIG.HEIGHT - GAME_CONFIG.PADDLE_HEIGHT, y));
+  }
+
+  setSettings(nextSettings) {
+    this.settings = normalizeMatchSettings(nextSettings);
+    const speed = Math.hypot(this.vx, this.vy);
+    if (speed > this.settings.maxBallSpeed && speed > 0) {
+      const scale = this.settings.maxBallSpeed / speed;
+      this.vx *= scale;
+      this.vy *= scale;
+    }
   }
 
   centerPaddles() {
@@ -49,6 +66,10 @@ export class GameState {
 
   resetAll() {
     this.matchActive = false;
+    this.matchOver = false;
+    this.winner = null;
+    this.timeRemaining =
+      this.settings.mode === MATCH_MODES.TIMED ? this.settings.timeLimitSec : 0;
     this.paused = false;
     this.pauseReason = '';
     this.pausedBy = '';
@@ -68,13 +89,27 @@ export class GameState {
 
   resetMatch() {
     this.matchActive = true;
+    this.matchOver = false;
+    this.winner = null;
     this.paused = false;
     this.pauseReason = '';
     this.pausedBy = '';
     this.hostScore = 0;
     this.guestScore = 0;
+    this.timeRemaining =
+      this.settings.mode === MATCH_MODES.TIMED ? this.settings.timeLimitSec : 0;
     this.centerPaddles();
     this.prepareServe(Math.random() < 0.5 ? 1 : -1);
+  }
+
+  setMatchOver(winner) {
+    this.matchOver = true;
+    this.winner = winner;
+    this.serveTimer = 0;
+    this.waitingForServe = false;
+    this.paused = false;
+    this.pauseReason = '';
+    this.pausedBy = '';
   }
 
   prepareServe(direction) {
@@ -87,7 +122,7 @@ export class GameState {
 
     this.centerBall();
     const angle = (Math.random() - 0.5) * GAME_CONFIG.SERVE_ANGLE_RANGE;
-    const speed = GAME_CONFIG.INITIAL_BALL_SPEED;
+    const speed = this.settings?.initialBallSpeed ?? GAME_CONFIG.INITIAL_BALL_SPEED;
     this.vx = Math.cos(angle) * speed * direction;
     this.vy = Math.sin(angle) * speed;
     this.serveTimer = GAME_CONFIG.SERVE_DELAY;
@@ -105,12 +140,14 @@ export class GameState {
   }
 
   setLocalPaddleY(isHost, y) {
+    if (!Number.isFinite(y)) return;
     const clamped = GameState.clampPaddleY(y);
     if (isHost) this.hostY = clamped;
     else this.guestY = clamped;
   }
 
   setRemotePaddleY(isHost, y) {
+    if (!Number.isFinite(y)) return;
     const clamped = GameState.clampPaddleY(y);
     if (isHost) this.guestY = clamped;
     else this.hostY = clamped;

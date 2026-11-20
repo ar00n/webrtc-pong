@@ -1,4 +1,5 @@
-import { GAME_CONFIG } from '../config/constants.js';
+import { GAME_CONFIG, MATCH_MODES } from '../config/constants.js';
+import { formatTimeClock, isMatchInOvertime } from './MatchSettings.js';
 
 export class Renderer {
   #canvas;
@@ -29,6 +30,9 @@ export class Renderer {
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // Top-center match mode / timer HUD
+    this.#drawMatchHud(state);
+
     // Scores
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 36px monospace';
@@ -37,17 +41,20 @@ export class Renderer {
     ctx.fillText(String(state.guestScore), W * 0.75, 48);
 
     if (view.inRoom) {
-      ctx.fillStyle = '#555';
+      ctx.fillStyle = '#666';
       ctx.font = '12px system-ui, sans-serif';
       ctx.fillText('YOU', view.isHost ? W * 0.25 : W * 0.75, 68);
     }
 
     // Paddles
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = view.hostColor || '#ffffff';
     ctx.fillRect(PADDLE_MARGIN, state.hostY, PADDLE_WIDTH, PADDLE_HEIGHT);
+
+    ctx.fillStyle = view.guestColor || '#ffffff';
     ctx.fillRect(W - PADDLE_MARGIN - PADDLE_WIDTH, state.guestY, PADDLE_WIDTH, PADDLE_HEIGHT);
 
     // Ball
+    ctx.fillStyle = '#fff';
     const drawBx = state.ballX + state.visErrX;
     const drawBy = Math.max(BALL_RADIUS, Math.min(H - BALL_RADIUS, state.ballY + state.visErrY));
     ctx.beginPath();
@@ -58,6 +65,48 @@ export class Renderer {
     if (view.overlay) {
       this.#drawOverlay(view.overlay.title, view.overlay.subtitle, view.overlay.accentColor);
     }
+  }
+
+  #drawMatchHud(state) {
+    const ctx = this.#ctx;
+    const W = GAME_CONFIG.WIDTH;
+    const settings = state.settings;
+    if (!settings) return;
+
+    let label = '';
+    let color = '#888';
+
+    if (settings.mode === MATCH_MODES.TIMED) {
+      if (isMatchInOvertime(state, settings)) {
+        label = 'OVERTIME • NEXT POINT WINS';
+        color = '#f2c94c';
+      } else {
+        const clock = state.matchActive
+          ? formatTimeClock(state.timeRemaining)
+          : formatTimeClock(settings.timeLimitSec);
+        label = `${clock} • ${settings.difficulty.toUpperCase()}`;
+        color = state.matchActive && state.timeRemaining <= 10 ? '#eb5757' : '#bbb';
+      }
+    } else if (settings.mode === MATCH_MODES.FIRST_TO) {
+      label = `FIRST TO ${settings.targetScore} • ${settings.difficulty.toUpperCase()}`;
+    } else if (settings.mode === MATCH_MODES.WIN_BY_2) {
+      label = `WIN BY 2 (${settings.targetScore}) • ${settings.difficulty.toUpperCase()}`;
+    } else {
+      label = `ENDLESS • ${settings.difficulty.toUpperCase()}`;
+    }
+
+    ctx.font = '600 11px monospace';
+    const textWidth = ctx.measureText(label).width;
+    const padX = 10;
+    const boxW = textWidth + padX * 2;
+
+    // Mask dashed line behind pill
+    ctx.fillStyle = '#000';
+    ctx.fillRect(W / 2 - boxW / 2, 6, boxW, 20);
+
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.fillText(label, W / 2, 20);
   }
 
   #syncResolution() {
@@ -78,7 +127,7 @@ export class Renderer {
     const ctx = this.#ctx;
     const { WIDTH: W, HEIGHT: H } = GAME_CONFIG;
 
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
     ctx.fillRect(0, 0, W, H);
 
     ctx.textAlign = 'center';

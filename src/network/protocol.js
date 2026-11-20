@@ -5,11 +5,15 @@ export const MSG_TYPE = Object.freeze({
   PING: 'ping',
   PONG: 'pong',
   PADDLE: 'p',
+  PADDLE_COLOR: 'paddleColor',
+  WIN_SOUND: 'winSound',
+  GAME_SETTINGS: 'gameSettings',
   PAUSE: 'pause',
   SYNC_STATE: 'syncState',
   SERVE: 'serve',
   HIT: 'hit',
-  MISS: 'miss'
+  MISS: 'miss',
+  MATCH_OVER: 'matchOver'
 });
 
 const UNSEQUENCED_TYPES = new Set([
@@ -23,5 +27,9 @@ export function isSequencedMessage(type) {
 }
 
 export function getAppId() {
-  return NETWORK_CONFIG.APP_ID_PREFIX + location.origin + location.pathname.replace(/\/index\.html$/, '/');
+  let path = location.pathname.replace(/\/index\.html$/, '/');
+  if (!path.endsWith('/') && !/\.[^/]+$/.test(path)) {
+    path += '/';
+  }
+  return NETWORK_CONFIG.APP_ID_PREFIX + location.origin + path;
 }
