@@ -12,14 +12,19 @@
 
   let nicknameDraft = $state('');
   let nicknameFocused = $state(false);
+  let lastNickname;
 
   onDestroy(() => {
     clearTimeout(copyBackupTimer);
   });
 
   $effect(() => {
-    if (!nicknameFocused) {
-      nicknameDraft = identity.nickname;
+    const current = identity.nickname;
+    if (current !== lastNickname) {
+      lastNickname = current;
+      if (!nicknameFocused) {
+        nicknameDraft = current;
+      }
     }
   });
 
@@ -115,7 +120,7 @@
       class="secondary small"
       onclick={(e) => {
         e.currentTarget.blur();
-        onNicknameChange(nicknameDraft);
+        saveNickname();
       }}
     >
       Set Name
