@@ -1,7 +1,7 @@
 import { GAME_CONFIG } from '../config/constants.js';
 import { isEditableElement } from '../utils/dom.js';
 
-const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label';
+const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label, summary';
 
 export class InputController {
   #canvas;

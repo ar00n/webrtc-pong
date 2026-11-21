@@ -119,3 +119,13 @@ export const MODE_CONFIG = Object.freeze({
   MIN_TIME_LIMIT_SEC: 30,
   MAX_TIME_LIMIT_SEC: 600
 });
+
+export const IDENTITY_CONFIG = Object.freeze({
+  STORAGE_KEY: 'p2p-pong-identity-v1',
+  DEFAULT_NICKNAME: 'Player',
+  MAX_NICKNAME_LENGTH: 20,
+  MAX_STORED_RECEIPTS: 200,
+  MAX_SHARED_RECEIPTS: 30,
+  MAX_SHARED_VOUCHES: 100,
+  MAX_TRUST_HOPS: 2
+});

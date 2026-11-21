@@ -1,12 +1,25 @@
 import { MATCH_MODES, PADDLE_COLORS } from '../config/constants.js';
 import { formatMatchSummary, resolvePaddleColor } from '../game/MatchSettings.js';
-import { copyToClipboard, flashButtonLabel } from '../utils/dom.js';
+import { formatPlayerTag } from '../identity/IdentityCrypto.js';
 import { buildInviteUrl, normalizeRoomCode } from '../utils/code.js';
+import { copyToClipboard, flashButtonLabel } from '../utils/dom.js';
 
 export class UIManager {
   #els;
   #handlers;
   #swatchButtons = new Map();
+  #activeTab = 'mine';
+  #openDropdownId = null;
+  #identitySnapshot = {
+    myPlayerId: '',
+    nickname: 'Player',
+    displayTag: 'Player#------',
+    myStats: { wins: 0, losses: 0, draws: 0, total: 0 },
+    myReceipts: [],
+    trustedAnchors: [],
+    vouchedFriends: []
+  };
+  #opponentSnapshot = null;
 
   constructor(handlers) {
     this.#handlers = handlers;
@@ -32,6 +45,14 @@ export class UIManager {
       volumeSlider: document.getElementById('volumeSlider'),
       volumeValue: document.getElementById('volumeValue'),
 
+      // Dropdown toolbar & summary indicators
+      rulesSummaryText: document.getElementById('rulesSummaryText'),
+      localColorDot: document.getElementById('localColorDot'),
+      remoteColorMini: document.getElementById('remoteColorMini'),
+      dropdownTriggers: Array.from(document.querySelectorAll('[data-dropdown-target]')),
+      dropdownPopovers: Array.from(document.querySelectorAll('.dropdown-popover')),
+      dropdownCloseBtns: Array.from(document.querySelectorAll('[data-close-dropdown]')),
+
       // Match settings controls
       hostSettingsControls: document.getElementById('hostSettingsControls'),
       guestSettingsBanner: document.getElementById('guestSettingsBanner'),
@@ -56,7 +77,34 @@ export class UIManager {
 
       // Win sound controls
       winSoundSelect: document.getElementById('winSoundSelect'),
-      btnPreviewWinSound: document.getElementById('btnPreviewWinSound')
+      btnPreviewWinSound: document.getElementById('btnPreviewWinSound'),
+
+      // Identity, Web of Trust & History controls
+      myIdentityBadge: document.getElementById('myIdentityBadge'),
+      myRecordBadge: document.getElementById('myRecordBadge'),
+      nicknameInput: document.getElementById('nicknameInput'),
+      btnSaveNickname: document.getElementById('btnSaveNickname'),
+      btnToggleLedger: document.getElementById('btnToggleLedger'),
+      btnBackupIdentity: document.getElementById('btnBackupIdentity'),
+      backupPanel: document.getElementById('backupPanel'),
+      btnDownloadBackup: document.getElementById('btnDownloadBackup'),
+      btnCopyBackup: document.getElementById('btnCopyBackup'),
+      importBackupInput: document.getElementById('importBackupInput'),
+      btnImportBackup: document.getElementById('btnImportBackup'),
+      backupFeedback: document.getElementById('backupFeedback'),
+
+      opponentIdentityBar: document.getElementById('opponentIdentityBar'),
+      opponentNameBadge: document.getElementById('opponentNameBadge'),
+      opponentTrustBadge: document.getElementById('opponentTrustBadge'),
+      btnTrustOpponent: document.getElementById('btnTrustOpponent'),
+      opponentRecordSummary: document.getElementById('opponentRecordSummary'),
+      btnViewOpponentHistory: document.getElementById('btnViewOpponentHistory'),
+
+      ledgerPanel: document.getElementById('ledgerPanel'),
+      tabMyHistory: document.getElementById('tabMyHistory'),
+      tabOpponentHistory: document.getElementById('tabOpponentHistory'),
+      tabTrustGraph: document.getElementById('tabTrustGraph'),
+      ledgerContent: document.getElementById('ledgerContent')
     };
 
     this.#buildColorSwatches();
@@ -68,12 +116,14 @@ export class UIManager {
   }
 
   setLobbyView() {
+    this.#closeAllDropdowns();
     this.#els.roomBox.classList.add('hidden');
     this.#els.lobbyBox.classList.remove('hidden');
   }
 
   setRoomView(code) {
     this.clearJoinError();
+    this.#closeAllDropdowns();
     this.#els.roomCodeDisplay.textContent = code;
     this.#els.lobbyBox.classList.add('hidden');
     this.#els.roomBox.classList.remove('hidden');
@@ -96,6 +146,80 @@ export class UIManager {
   setStatus(message, mode = '') {
     this.#els.status.textContent = message;
     this.#els.dot.className = 'dot' + (mode ? ` ${mode}` : '');
+  }
+
+  updateIdentityControls(snapshot) {
+    this.#identitySnapshot = snapshot;
+    this.#els.myIdentityBadge.textContent = snapshot.displayTag;
+    this.#els.myIdentityBadge.title = snapshot.displayTag;
+    if (this.#els.myRecordBadge) {
+      this.#els.myRecordBadge.textContent = fmtRecord(snapshot.myStats);
+    }
+    if (document.activeElement !== this.#els.nicknameInput) {
+      this.#els.nicknameInput.value = snapshot.nickname;
+    }
+    this.#els.btnToggleLedger.textContent = `History (${snapshot.myReceipts.length})`;
+    this.#renderLedger();
+  }
+
+  updateOpponentIdentity(snapshot) {
+    this.#opponentSnapshot = snapshot;
+    const bar = this.#els.opponentIdentityBar;
+
+    if (!snapshot) {
+      bar.classList.add('hidden');
+      this.#els.tabOpponentHistory.classList.add('hidden');
+      if (this.#activeTab === 'opponent') {
+        this.#setActiveTab('mine');
+      }
+      this.#renderLedger();
+      return;
+    }
+
+    bar.classList.remove('hidden');
+
+    if (snapshot.verifying) {
+      this.#els.opponentNameBadge.textContent = 'Verifying opponent key...';
+      this.#els.opponentTrustBadge.textContent = 'Checking';
+      this.#els.opponentTrustBadge.className = 'trust-pill neutral';
+      this.#els.btnTrustOpponent.classList.add('hidden');
+      this.#els.btnViewOpponentHistory.classList.add('hidden');
+      this.#els.opponentRecordSummary.textContent = '';
+      this.#els.tabOpponentHistory.classList.add('hidden');
+      this.#renderLedger();
+      return;
+    }
+
+    const { peer, isTrustedAnchor, trustInfo, historySummary } = snapshot;
+    this.#els.opponentNameBadge.textContent = peer.displayTag;
+    this.#els.opponentTrustBadge.textContent = trustInfo.label;
+    this.#els.opponentTrustBadge.className = `trust-pill ${trustInfo.trusted ? 'trusted' : 'unknown'}`;
+
+    this.#els.btnTrustOpponent.classList.remove('hidden');
+    this.#els.btnTrustOpponent.textContent = isTrustedAnchor ? '★ Trusted Friend' : '☆ Trust Friend';
+    this.#els.btnTrustOpponent.classList.toggle('active', isTrustedAnchor);
+
+    const { trusted, all, untrustedCount } = historySummary;
+    if (all.total === 0) {
+      this.#els.opponentRecordSummary.textContent = 'Record: 0W–0L';
+      this.#els.opponentRecordSummary.title = 'No signed matches recorded yet.';
+    } else if (untrustedCount === 0) {
+      this.#els.opponentRecordSummary.textContent = `Record: ${fmtRecord(trusted)}`;
+      this.#els.opponentRecordSummary.title =
+        'All signed matches are against you or players in your Web of Trust.';
+    } else {
+      this.#els.opponentRecordSummary.textContent =
+        `Known Record: ${fmtRecord(trusted)} (+${untrustedCount} vs strangers)`;
+      this.#els.opponentRecordSummary.title =
+        `${fmtRecord(trusted)} against you or your Web of Trust; ${untrustedCount} additional signed match(es) against unknown players.`;
+    }
+
+    this.#els.btnViewOpponentHistory.classList.remove('hidden');
+    this.#els.btnViewOpponentHistory.textContent = `Matches (${all.total})`;
+    this.#els.tabOpponentHistory.classList.remove('hidden');
+    this.#els.tabOpponentHistory.textContent = `Opponent (${all.total})`;
+
+    this.#renderLedger();
   }
 
   updateAudioControls(volumePct, isMuted) {
@@ -126,29 +250,46 @@ export class UIManager {
   }
 
   updatePaddleColorControls({ localColorId, remoteColorId, connected }) {
-    const selectedId = resolvePaddleColor(localColorId).id;
+    const localColor = resolvePaddleColor(localColorId);
+    const selectedId = localColor.id;
     for (const [id, btn] of this.#swatchButtons.entries()) {
       const isSelected = id === selectedId;
       btn.classList.toggle('selected', isSelected);
       btn.setAttribute('aria-pressed', String(isSelected));
     }
 
+    if (this.#els.localColorDot) {
+      this.#els.localColorDot.style.backgroundColor = localColor.hex;
+    }
+
     this.#els.opponentColorBadge.classList.toggle('hidden', !connected);
+    if (this.#els.remoteColorMini) {
+      this.#els.remoteColorMini.classList.toggle('hidden', !connected);
+    }
+
     if (connected) {
       const remoteColor = resolvePaddleColor(remoteColorId);
       this.#els.opponentColorDot.style.backgroundColor = remoteColor.hex;
       this.#els.opponentColorName.textContent = remoteColor.label;
+      if (this.#els.remoteColorMini) {
+        this.#els.remoteColorMini.style.backgroundColor = remoteColor.hex;
+      }
     }
   }
 
   updateMatchSettings(settings, { inRoom, isHost }) {
+    const summary = formatMatchSummary(settings);
+    if (this.#els.rulesSummaryText) {
+      this.#els.rulesSummaryText.textContent = summary;
+    }
+
     const canEdit = !inRoom || isHost;
     this.#els.hostSettingsControls.classList.toggle('hidden', !canEdit);
     this.#els.guestSettingsBanner.classList.toggle('hidden', canEdit);
 
     if (!canEdit) {
       this.#els.customDifficultyRow.classList.add('hidden');
-      this.#els.guestRulesSummary.textContent = formatMatchSummary(settings);
+      this.#els.guestRulesSummary.textContent = summary;
       return;
     }
 
@@ -156,7 +297,6 @@ export class UIManager {
     this.#els.modeSelect.value = settings.mode;
     this.#els.targetScoreInput.value = String(settings.targetScore);
 
-    // Ensure timeLimitSelect shows current value (even if non-preset)
     const timeVal = String(settings.timeLimitSec);
     if (!Array.from(this.#els.timeLimitSelect.options).some((o) => o.value === timeVal)) {
       const opt = document.createElement('option');
@@ -201,6 +341,218 @@ export class UIManager {
     this.#els.btnPause.textContent = paused ? 'Resume (Space)' : 'Pause (Space)';
   }
 
+  #toggleDropdown(targetId) {
+    const nextId = this.#openDropdownId === targetId ? null : targetId;
+    this.#openDropdownId = nextId;
+
+    for (const popover of this.#els.dropdownPopovers) {
+      popover.classList.toggle('hidden', popover.id !== nextId);
+    }
+    for (const trigger of this.#els.dropdownTriggers) {
+      const isOpen = trigger.dataset.dropdownTarget === nextId;
+      trigger.setAttribute('aria-expanded', String(isOpen));
+    }
+  }
+
+  #closeAllDropdowns() {
+    if (!this.#openDropdownId) return;
+    this.#openDropdownId = null;
+    for (const popover of this.#els.dropdownPopovers) {
+      popover.classList.add('hidden');
+    }
+    for (const trigger of this.#els.dropdownTriggers) {
+      trigger.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  #setActiveTab(tab) {
+    this.#activeTab = tab;
+    this.#els.tabMyHistory.classList.toggle('active', tab === 'mine');
+    this.#els.tabOpponentHistory.classList.toggle('active', tab === 'opponent');
+    this.#els.tabTrustGraph.classList.toggle('active', tab === 'trust');
+    this.#renderLedger();
+  }
+
+  #renderLedger() {
+    if (this.#els.ledgerPanel.classList.contains('hidden')) return;
+    const container = this.#els.ledgerContent;
+    container.innerHTML = '';
+
+    if (this.#activeTab === 'mine') {
+      this.#renderMyReceipts(container);
+    } else if (this.#activeTab === 'opponent') {
+      this.#renderOpponentReceipts(container);
+    } else {
+      this.#renderTrustGraph(container);
+    }
+  }
+
+  #renderMyReceipts(container) {
+    const receipts = this.#identitySnapshot.myReceipts;
+    if (receipts.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'status';
+      empty.textContent = 'No mutually signed matches yet. Finish a match to record a dual-signed receipt.';
+      container.appendChild(empty);
+      return;
+    }
+
+    const myId = this.#identitySnapshot.myPlayerId;
+    const anchorIds = new Set(this.#identitySnapshot.trustedAnchors.map((a) => a.playerId));
+
+    for (const r of receipts) {
+      const p = r.parsed;
+      const iWasHost = p.host.id === myId;
+      const opponent = iWasHost ? p.guest : p.host;
+      const myScore = iWasHost ? p.hostScore : p.guestScore;
+      const oppScore = iWasHost ? p.guestScore : p.hostScore;
+      const iWon = (iWasHost && p.winner === 'host') || (!iWasHost && p.winner === 'guest');
+
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+
+      const main = document.createElement('div');
+      main.className = 'ledger-row-main';
+
+      const title = document.createElement('strong');
+      title.textContent = `${p.winner === 'draw' ? 'DRAW' : iWon ? 'WIN' : 'LOSS'} ${myScore}–${oppScore} vs ${formatPlayerTag(opponent.nickname, opponent.id)}`;
+      title.className = p.winner === 'draw' ? '' : iWon ? 'win-text' : 'loss-text';
+
+      const meta = document.createElement('span');
+      meta.className = 'ledger-meta';
+      const dateStr = new Date(p.timestamp).toLocaleString();
+      const modeStr = p.settings?.mode || 'match';
+      meta.textContent = `${dateStr} • ${modeStr} • Dual-Signed`;
+
+      main.append(title, meta);
+
+      const badge = document.createElement('span');
+      badge.className = `trust-pill ${anchorIds.has(opponent.id) ? 'trusted' : 'neutral'}`;
+      badge.textContent = anchorIds.has(opponent.id) ? 'Trusted Friend' : 'Signed Receipt';
+
+      row.append(main, badge);
+      container.appendChild(row);
+    }
+  }
+
+  #renderOpponentReceipts(container) {
+    const snap = this.#opponentSnapshot;
+    if (!snap || snap.verifying) {
+      const msg = document.createElement('p');
+      msg.className = 'status';
+      msg.textContent = 'Connect and authenticate with an opponent to view their signed history.';
+      container.appendChild(msg);
+      return;
+    }
+
+    const { peer, historySummary } = snap;
+    const { trusted, untrustedCount, items } = historySummary;
+    const summaryBanner = document.createElement('div');
+    summaryBanner.className = 'ledger-summary';
+    summaryBanner.textContent = untrustedCount === 0
+      ? `${peer.displayTag} — Record: ${fmtRecord(trusted)} (all in your Web of Trust)`
+      : `${peer.displayTag} — Known Record: ${fmtRecord(trusted)} • +${untrustedCount} dual-signed vs strangers`;
+    container.appendChild(summaryBanner);
+
+    if (items.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'status';
+      empty.textContent = 'This opponent has not shared any signed match receipts yet.';
+      container.appendChild(empty);
+      return;
+    }
+
+    for (const item of items) {
+      const p = item.receipt.parsed;
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+
+      const main = document.createElement('div');
+      main.className = 'ledger-row-main';
+
+      const title = document.createElement('strong');
+      const outcome = item.isDraw ? 'DREW' : item.peerWon ? 'BEAT' : 'LOST TO';
+      title.textContent = `${peer.displayTag} ${outcome} ${item.classification.otherTag} (${item.myScore}–${item.oppScore})`;
+      title.className = item.isDraw ? '' : item.peerWon ? 'win-text' : 'loss-text';
+
+      const meta = document.createElement('span');
+      meta.className = 'ledger-meta';
+      meta.textContent = `${new Date(p.timestamp).toLocaleString()} • Both signatures verified`;
+
+      main.append(title, meta);
+
+      const badge = document.createElement('span');
+      badge.className = `trust-pill ${item.classification.trusted ? 'trusted' : 'unknown'}`;
+      badge.textContent = item.classification.badge;
+
+      row.append(main, badge);
+      container.appendChild(row);
+    }
+  }
+
+  #renderTrustGraph(container) {
+    const { trustedAnchors, vouchedFriends } = this.#identitySnapshot;
+
+    const anchorHeader = document.createElement('div');
+    anchorHeader.className = 'ledger-section-title';
+    anchorHeader.textContent = `Direct Trusted Friends (${trustedAnchors.length})`;
+    container.appendChild(anchorHeader);
+
+    if (trustedAnchors.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'status';
+      empty.textContent = 'No trusted friends yet. Click "☆ Trust" next to an opponent you know IRL/online.';
+      container.appendChild(empty);
+    } else {
+      for (const anchor of trustedAnchors) {
+        const row = document.createElement('div');
+        row.className = 'ledger-row';
+
+        const label = document.createElement('span');
+        label.textContent = formatPlayerTag(anchor.nickname, anchor.playerId);
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'secondary small';
+        btn.textContent = 'Untrust';
+        btn.addEventListener('click', (e) => {
+          e.currentTarget.blur();
+          this.#handlers.onUntrustAnchor?.(anchor.playerId);
+        });
+
+        row.append(label, btn);
+        container.appendChild(row);
+      }
+    }
+
+    const vouchedHeader = document.createElement('div');
+    vouchedHeader.className = 'ledger-section-title';
+    vouchedHeader.textContent = `Web of Trust (1–2 Hops: ${vouchedFriends.length})`;
+    container.appendChild(vouchedHeader);
+
+    if (vouchedFriends.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'status';
+      empty.textContent = 'Play with trusted friends to automatically discover peers they have vouched for.';
+      container.appendChild(empty);
+    } else {
+      for (const vf of vouchedFriends) {
+        const row = document.createElement('div');
+        row.className = 'ledger-row';
+
+        const label = document.createElement('span');
+        label.textContent = vf.displayTag;
+
+        const badge = document.createElement('span');
+        badge.className = 'trust-pill trusted';
+        badge.textContent = `Hop ${vf.hop} via ${vf.viaName}`;
+
+        row.append(label, badge);
+        container.appendChild(row);
+      }
+    }
+  }
+
   #buildColorSwatches() {
     const container = this.#els.paddleColorPalette;
     container.innerHTML = '';
@@ -225,14 +577,49 @@ export class UIManager {
   #bindEvents() {
     const els = this.#els;
 
+    // Dropdown popover controls
+    for (const trigger of els.dropdownTriggers) {
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        trigger.blur();
+        this.#toggleDropdown(trigger.dataset.dropdownTarget);
+      });
+    }
+
+    for (const closeBtn of els.dropdownCloseBtns) {
+      closeBtn.addEventListener('click', (e) => {
+        e.currentTarget.blur();
+        this.#closeAllDropdowns();
+      });
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!this.#openDropdownId) return;
+      if (e.target.closest('.dropdown-popover') || e.target.closest('[data-dropdown-target]')) {
+        return;
+      }
+      this.#closeAllDropdowns();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.#openDropdownId) {
+        const tag = document.activeElement?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+          this.#closeAllDropdowns();
+        }
+      }
+    });
+
     els.btnHost.addEventListener('click', (e) => {
       e.currentTarget.blur();
+      this.#closeAllDropdowns();
       this.#handlers.onHost();
     });
 
     const submitJoin = () => {
       const normalized = normalizeRoomCode(els.joinCodeInput.value);
       els.joinCodeInput.value = normalized;
+      this.#closeAllDropdowns();
       this.#handlers.onJoin(normalized);
     };
 
@@ -256,6 +643,7 @@ export class UIManager {
 
     els.btnLeave.addEventListener('click', (e) => {
       e.currentTarget.blur();
+      this.#closeAllDropdowns();
       this.#handlers.onLeave();
     });
 
@@ -289,6 +677,105 @@ export class UIManager {
     });
     els.volumeSlider.addEventListener('change', (e) => e.currentTarget.blur());
     els.volumeSlider.addEventListener('pointerup', (e) => e.currentTarget.blur());
+
+    // Identity & Nickname events
+    const saveNickname = () => {
+      this.#handlers.onNicknameChange?.(els.nicknameInput.value);
+      els.nicknameInput.blur();
+    };
+    els.btnSaveNickname.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      saveNickname();
+    });
+    els.nicknameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveNickname();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        els.nicknameInput.value = this.#identitySnapshot.nickname;
+        els.nicknameInput.blur();
+      }
+    });
+
+    els.btnTrustOpponent.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#handlers.onToggleTrustOpponent?.();
+    });
+
+    els.btnViewOpponentHistory.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#closeAllDropdowns();
+      els.ledgerPanel.classList.toggle('hidden');
+      this.#setActiveTab('opponent');
+    });
+
+    els.btnToggleLedger.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#closeAllDropdowns();
+      els.ledgerPanel.classList.toggle('hidden');
+      this.#renderLedger();
+    });
+
+    els.tabMyHistory.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#setActiveTab('mine');
+    });
+    els.tabOpponentHistory.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#setActiveTab('opponent');
+    });
+    els.tabTrustGraph.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#setActiveTab('trust');
+    });
+
+    // Backup / Restore events
+    els.btnBackupIdentity.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      els.backupPanel.classList.toggle('hidden');
+      els.backupFeedback.textContent = '';
+    });
+
+    els.btnCopyBackup.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.blur();
+      const json = this.#handlers.onExportIdentity?.() || '';
+      const ok = await copyToClipboard(json);
+      flashButtonLabel(btn, ok ? 'Copied!' : 'Copy Failed');
+    });
+
+    els.btnDownloadBackup.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      const json = this.#handlers.onExportIdentity?.() || '';
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const safeTag = this.#identitySnapshot.displayTag
+        .replace('#', '-')
+        .replace(/[^a-zA-Z0-9._-]/g, '_');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pong-identity-${safeTag}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    els.btnImportBackup.addEventListener('click', async (e) => {
+      e.currentTarget.blur();
+      const raw = els.importBackupInput.value.trim();
+      if (!raw) {
+        els.backupFeedback.textContent = 'Paste a backup JSON first.';
+        return;
+      }
+      const res = await this.#handlers.onImportIdentity?.(raw);
+      if (res?.ok) {
+        els.importBackupInput.value = '';
+        els.importBackupInput.blur();
+        els.backupFeedback.textContent = `Restored identity: ${res.displayTag}`;
+      } else {
+        els.backupFeedback.textContent = res?.error || 'Restore failed.';
+      }
+    });
 
     // Match Settings events
     els.difficultySelect.addEventListener('change', (e) => {
@@ -348,4 +835,8 @@ export class UIManager {
       this.#handlers.onPreviewWinSound?.();
     });
   }
+}
+
+function fmtRecord(s) {
+  return `${s.wins}W–${s.losses}L${s.draws ? `–${s.draws}D` : ''}`;
 }
