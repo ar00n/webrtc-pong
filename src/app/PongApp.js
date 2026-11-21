@@ -45,6 +45,8 @@ export class PongApp {
   #localSettings = createDefaultMatchSettings();
   #localColorId = PADDLE_CONFIG.DEFAULT_COLOR_ID;
   #remoteColorId = PADDLE_CONFIG.DEFAULT_COLOR_ID;
+  #localReady = false;
+  #remoteReady = false;
 
   // Identity, auth & match-signing session state
   #authSessionId = 0;
@@ -66,6 +68,7 @@ export class PongApp {
       onHost: () => this.hostRoom(),
       onJoin: (code) => this.joinRoom(code),
       onLeave: () => this.leaveRoom(),
+      onToggleReady: () => this.toggleReady(),
       onTogglePause: () => this.togglePause(),
       onResetScore: () => this.#resetHostMatch(),
       onToggleMute: () => this.#toggleMute(),
@@ -152,6 +155,22 @@ export class PongApp {
     this.#syncMatchSettingsUI();
     this.#syncPaddleColorUI();
     this.#syncOpponentTrustUI();
+    this.#syncStatusUI();
+  }
+
+  toggleReady() {
+    if (
+      !this.#network.connected ||
+      this.#network.connectionLost ||
+      (this.#state.matchActive && !this.#state.matchOver)
+    ) {
+      return;
+    }
+
+    this.#audio.unlock();
+    this.#localReady = !this.#localReady;
+    this.#sendReadyState();
+    this.#tryStartMatchIfReady();
     this.#syncStatusUI();
   }
 
@@ -689,6 +708,8 @@ export class PongApp {
     this.#audio.resetHitDeduplication();
     this.#remoteColorId = PADDLE_CONFIG.DEFAULT_COLOR_ID;
     this.#remoteWinSoundId = AUDIO_CONFIG.DEFAULT_WIN_SOUND;
+    this.#localReady = false;
+    this.#remoteReady = false;
     this.#lastSentPaddleY = null;
     this.#lastPaddleSend = 0;
     this.#currentMatchId = '';
@@ -696,14 +717,46 @@ export class PongApp {
   }
 
   #resetHostMatch() {
-    if (!this.#network.isHost || !this.#network.connected || this.#network.connectionLost) {
+    if (
+      !this.#network.isHost ||
+      !this.#network.connected ||
+      this.#network.connectionLost ||
+      !this.#state.matchActive ||
+      this.#state.matchOver
+    ) {
       return;
     }
+    this.#startHostMatch();
+  }
+
+  #startHostMatch() {
     this.#state.resetMatch();
     this.#currentMatchId = generateMatchId();
     this.#audio.resetHitDeduplication();
     this.#sendServe();
     this.#syncStatusUI();
+  }
+
+  #tryStartMatchIfReady() {
+    if (
+      !this.#network.isHost ||
+      !this.#network.connected ||
+      this.#network.connectionLost ||
+      !this.#localReady ||
+      !this.#remoteReady ||
+      (this.#state.matchActive && !this.#state.matchOver)
+    ) {
+      return;
+    }
+
+    this.#localReady = false;
+    this.#remoteReady = false;
+    this.#startHostMatch();
+  }
+
+  #sendReadyState() {
+    if (!this.#network.connected) return;
+    this.#network.send(MSG_TYPE.READY, { ready: this.#localReady });
   }
 
   #initMatchSettings() {
@@ -725,9 +778,11 @@ export class PongApp {
     if (this.#network.inRoom && !this.#network.isHost) return;
     if (!patch || typeof patch !== 'object') return;
 
+    const prevSettings = JSON.stringify(this.#state.settings);
     const merged = { ...this.#state.settings, ...patch };
     this.#state.setSettings(merged);
     this.#localSettings = { ...this.#state.settings };
+    const settingsChanged = JSON.stringify(this.#state.settings) !== prevSettings;
 
     try {
       localStorage.setItem(MODE_CONFIG.STORAGE_SETTINGS_KEY, JSON.stringify(this.#localSettings));
@@ -737,6 +792,7 @@ export class PongApp {
 
     if (
       !this.#state.matchActive ||
+      this.#state.matchOver ||
       patch.mode !== undefined ||
       patch.timeLimitSec !== undefined
     ) {
@@ -750,6 +806,14 @@ export class PongApp {
       this.#sendGameSettings();
       if (this.#state.matchActive && !this.#state.matchOver) {
         this.#checkMatchWinner();
+      } else if (settingsChanged && (this.#localReady || this.#remoteReady)) {
+        const hadLocalReady = this.#localReady;
+        this.#localReady = false;
+        this.#remoteReady = false;
+        if (hadLocalReady) {
+          this.#sendReadyState();
+        }
+        this.#syncStatusUI();
       }
     }
   }
@@ -834,6 +898,7 @@ export class PongApp {
       this.#network.inRoom &&
       (
         !this.#network.connected ||
+        !this.#state.matchActive ||
         this.#state.paused ||
         this.#state.matchOver ||
         this.#network.connectionLost
@@ -848,6 +913,9 @@ export class PongApp {
   #triggerConnectionLostPause() {
     if (this.#state.matchActive && !this.#state.matchOver) {
       this.#state.setPaused(true, 'lost', '');
+    } else {
+      this.#localReady = false;
+      this.#remoteReady = false;
     }
     this.#input.resetKeys();
     this.#audio.playDisconnect();
@@ -880,6 +948,8 @@ export class PongApp {
       this.#state.waitingForServe = false;
       this.#remoteColorId = PADDLE_CONFIG.DEFAULT_COLOR_ID;
       this.#remoteWinSoundId = AUDIO_CONFIG.DEFAULT_WIN_SOUND;
+      this.#localReady = false;
+      this.#remoteReady = false;
       this.#resetAuthState();
       this.#triggerConnectionLostPause();
     });
@@ -891,6 +961,8 @@ export class PongApp {
     this.#network.on('connection-restored', () => {
       if (this.#state.matchActive && !this.#state.matchOver) {
         this.#state.setPaused(true, 'reconnected', '');
+      } else {
+        this.#sendReadyState();
       }
       if (this.#network.isHost) {
         this.#sendGameSettings();
@@ -948,12 +1020,7 @@ export class PongApp {
         if (net.isHost) {
           net.startPingLoop();
           this.#sendGameSettings();
-          if (!state.matchActive || (!wasHost && state.currentRound === 0)) {
-            state.resetMatch();
-            this.#currentMatchId = generateMatchId();
-            this.#audio.resetHitDeduplication();
-            this.#sendServe();
-          } else {
+          if (state.matchActive) {
             if (!this.#currentMatchId) {
               this.#currentMatchId = generateMatchId();
             }
@@ -961,12 +1028,13 @@ export class PongApp {
           }
         } else {
           net.stopPingLoop();
-          if (!state.matchActive) {
-            state.matchActive = true;
-            state.waitingForServe = true;
-          } else if (wasHost) {
+          if (state.matchActive && wasHost) {
             state.waitingForServe = true;
           }
+        }
+
+        if ((!state.matchActive || state.matchOver) && this.#localReady) {
+          this.#sendReadyState();
         }
 
         this.#sendPaddleColor();
@@ -974,6 +1042,15 @@ export class PongApp {
         this.#startPeerAuth();
         this.#syncMatchSettingsUI();
         this.#syncPaddleColorUI();
+        this.#syncStatusUI();
+        return;
+      }
+
+      case MSG_TYPE.READY: {
+        if (typeof msg.ready !== 'boolean') return;
+        if (state.matchActive && !state.matchOver) return;
+        this.#remoteReady = msg.ready;
+        this.#tryStartMatchIfReady();
         this.#syncStatusUI();
         return;
       }
@@ -1039,14 +1116,21 @@ export class PongApp {
 
       case MSG_TYPE.GAME_SETTINGS: {
         if (net.isHost || !msg.settings) return;
+        const prevSettings = JSON.stringify(state.settings);
         state.setSettings(msg.settings);
+        const settingsChanged = JSON.stringify(state.settings) !== prevSettings;
         if (Number.isFinite(msg.timeRemaining)) {
           state.timeRemaining = msg.timeRemaining;
-        } else if (!state.matchActive) {
+        } else if (!state.matchActive || state.matchOver) {
           state.timeRemaining =
             state.settings.mode === MATCH_MODES.TIMED ? state.settings.timeLimitSec : 0;
         }
+        if ((!state.matchActive || state.matchOver) && settingsChanged && this.#localReady) {
+          this.#localReady = false;
+          this.#sendReadyState();
+        }
         this.#syncMatchSettingsUI();
+        this.#syncStatusUI();
         return;
       }
 
@@ -1168,6 +1252,8 @@ export class PongApp {
         state.guestScore = gs;
         state.timeRemaining = nextTime;
         state.setMatchOver(msg.winner || null);
+        this.#localReady = false;
+        this.#remoteReady = false;
 
         const fallbackId =
           msg.winner === 'guest' ? this.#audio.selectedWinSoundId : this.#remoteWinSoundId;
@@ -1227,6 +1313,8 @@ export class PongApp {
     if (msg.matchOver) {
       state.setMatchOver(msg.winner || null);
     } else {
+      this.#localReady = false;
+      this.#remoteReady = false;
       state.matchOver = false;
       state.winner = null;
       if (typeof msg.paused === 'boolean') {
@@ -1265,9 +1353,18 @@ export class PongApp {
 
     const state = this.#state;
     const halfRtt = this.#network.halfRtt;
+    const startingNewMatch = !state.matchActive || state.matchOver;
 
-    if (msg.gs > state.guestScore) this.#audio.playScore(true);
-    else if (msg.hs > state.hostScore) this.#audio.playScore(false);
+    if (startingNewMatch) {
+      this.#localReady = false;
+      this.#remoteReady = false;
+      this.#expectedGuestMatch = null;
+      this.#audio.resetHitDeduplication();
+      state.centerPaddles();
+    } else {
+      if (msg.gs > state.guestScore) this.#audio.playScore(true);
+      else if (msg.hs > state.hostScore) this.#audio.playScore(false);
+    }
 
     state.matchActive = true;
     state.matchOver = false;
@@ -1380,6 +1477,8 @@ export class PongApp {
       winner === 'host' ? this.#audio.selectedWinSoundId : this.#remoteWinSoundId;
 
     this.#state.setMatchOver(winner);
+    this.#localReady = false;
+    this.#remoteReady = false;
     this.#network.send(MSG_TYPE.MATCH_OVER, {
       matchId: this.#currentMatchId,
       winner,
@@ -1409,7 +1508,9 @@ export class PongApp {
       connectionLost: net.connectionLost,
       matchActive: s.matchActive,
       matchOver: s.matchOver,
-      paused: s.paused
+      paused: s.paused,
+      localReady: this.#localReady,
+      remoteReady: this.#remoteReady
     });
 
     const showPing = net.connected && !net.connectionLost;
@@ -1430,10 +1531,23 @@ export class PongApp {
           : `Connecting to room ${net.roomCode}...`,
         'waiting'
       );
+    } else if (!s.matchActive) {
+      const readyCount = (this.#localReady ? 1 : 0) + (this.#remoteReady ? 1 : 0);
+      if (this.#localReady && this.#remoteReady) {
+        this.#ui.setStatus(`${net.roomCode} — Both players ready! Starting match...`, 'connected');
+      } else if (this.#localReady) {
+        this.#ui.setStatus(`${net.roomCode} — You are ready (${readyCount}/2). Waiting for opponent...`, 'waiting');
+      } else if (this.#remoteReady) {
+        this.#ui.setStatus(`${net.roomCode} — Opponent is ready (${readyCount}/2). Click Ready Up to start!`, 'waiting');
+      } else {
+        this.#ui.setStatus(`${net.roomCode} — Connected! Waiting for both players to Ready Up (0/2)`, 'waiting');
+      }
     } else if (s.matchOver) {
       const localWon = (net.isHost && s.winner === 'host') || (!net.isHost && s.winner === 'guest');
+      const readyCount = (this.#localReady ? 1 : 0) + (this.#remoteReady ? 1 : 0);
+      const readySuffix = readyCount > 0 ? ` • Rematch Ready (${readyCount}/2)` : '';
       this.#ui.setStatus(
-        `${net.roomCode} — Match over (${localWon ? 'You won!' : 'Opponent won!'})`,
+        `${net.roomCode} — Match over (${localWon ? 'You won!' : 'Opponent won!'})${readySuffix}`,
         'connected'
       );
     } else if (s.paused) {
@@ -1479,13 +1593,49 @@ export class PongApp {
       };
     }
 
+    if (!s.matchActive) {
+      if (this.#localReady && this.#remoteReady) {
+        return {
+          title: 'BOTH READY!',
+          subtitle: 'Starting match...',
+          accentColor: '#6fcf97'
+        };
+      }
+      if (this.#localReady) {
+        return {
+          title: 'WAITING FOR OPPONENT',
+          subtitle: 'You are Ready (1/2) • Waiting for opponent to click Ready Up',
+          accentColor: '#6fcf97'
+        };
+      }
+      if (this.#remoteReady) {
+        return {
+          title: 'OPPONENT IS READY!',
+          subtitle: 'Opponent is Ready (1/2) • Click Ready Up above to start',
+          accentColor: '#f2c94c'
+        };
+      }
+      return {
+        title: 'GET READY',
+        subtitle: 'Click Ready Up above when both players are set (0/2 Ready)',
+        accentColor: '#56ccf2'
+      };
+    }
+
     if (s.matchOver) {
       const localWon = (net.isHost && s.winner === 'host') || (!net.isHost && s.winner === 'guest');
+      let rematchHint = 'Both players click Play Again (Ready) to rematch';
+      if (this.#localReady && this.#remoteReady) {
+        rematchHint = 'Both ready! Starting rematch...';
+      } else if (this.#localReady) {
+        rematchHint = 'You are Ready (1/2) • Waiting for opponent';
+      } else if (this.#remoteReady) {
+        rematchHint = 'Opponent wants a rematch! Click Play Again (Ready) (1/2)';
+      }
+
       return {
         title: localWon ? 'YOU WIN!' : 'YOU LOSE',
-        subtitle: net.isHost
-          ? `Final Score: ${s.hostScore} – ${s.guestScore} • Click "Play Again" to rematch`
-          : `Final Score: ${s.hostScore} – ${s.guestScore} • Waiting for host to start rematch`,
+        subtitle: `Final Score: ${s.hostScore} – ${s.guestScore} • ${rematchHint}`,
         accentColor: localWon ? '#6fcf97' : '#eb5757'
       };
     }

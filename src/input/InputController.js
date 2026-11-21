@@ -51,7 +51,10 @@ export class InputController {
 
       if (e.code === 'Space' || e.key === ' ') {
         e.preventDefault();
-        if (!e.repeat) this.#handlers.onTogglePause?.();
+        if (!e.repeat) {
+          this.#handlers.onTogglePause?.()
+          this.#handlers.onToggleReady?.();
+        };
         return;
       }
 

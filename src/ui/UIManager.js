@@ -41,6 +41,10 @@ export class UIManager {
       btnPause: document.getElementById('btnPause'),
       btnResetScore: document.getElementById('btnResetScore'),
       btnLeave: document.getElementById('btnLeave'),
+      readyBar: document.getElementById('readyBar'),
+      localReadyPill: document.getElementById('localReadyPill'),
+      remoteReadyPill: document.getElementById('remoteReadyPill'),
+      btnReady: document.getElementById('btnReady'),
       btnMute: document.getElementById('btnMute'),
       volumeSlider: document.getElementById('volumeSlider'),
       volumeValue: document.getElementById('volumeValue'),
@@ -332,13 +336,45 @@ export class UIManager {
     }
   }
 
-  updateMatchControls({ inRoom, isHost, connected, connectionLost, matchActive, matchOver, paused }) {
-    this.#els.btnResetScore.classList.toggle('hidden', !connected || !isHost);
-    this.#els.btnResetScore.textContent = matchOver ? 'Play Again' : 'Reset Score';
+  updateMatchControls({
+    inRoom,
+    isHost,
+    connected,
+    connectionLost,
+    matchActive,
+    matchOver,
+    paused,
+    localReady = false,
+    remoteReady = false
+  }) {
+    const canMidMatchReset = connected && !connectionLost && isHost && matchActive && !matchOver;
+    this.#els.btnResetScore.classList.toggle('hidden', !canMidMatchReset);
+    this.#els.btnResetScore.textContent = 'Reset Score';
     this.#els.inviteArea.classList.toggle('hidden', !inRoom || !isHost);
 
     this.#els.btnPause.disabled = !connected || connectionLost || !matchActive || matchOver;
     this.#els.btnPause.textContent = paused ? 'Resume (Space)' : 'Pause (Space)';
+
+    const showReadyBar = inRoom && connected && !connectionLost && (!matchActive || matchOver);
+    this.#els.readyBar.classList.toggle('hidden', !showReadyBar);
+
+    if (showReadyBar) {
+      this.#els.localReadyPill.textContent = localReady ? 'You: Ready ✓' : 'You: Not Ready';
+      this.#els.localReadyPill.classList.toggle('ready', localReady);
+
+      this.#els.remoteReadyPill.textContent = remoteReady ? 'Opponent: Ready ✓' : 'Opponent: Not Ready';
+      this.#els.remoteReadyPill.classList.toggle('ready', remoteReady);
+
+      this.#els.btnReady.disabled = false;
+      this.#els.btnReady.classList.toggle('is-ready', localReady);
+      if (localReady) {
+        this.#els.btnReady.textContent = 'Ready ✓ (Cancel)';
+      } else {
+        this.#els.btnReady.textContent = matchOver ? 'Play Again (Ready)' : 'Ready Up';
+      }
+    } else {
+      this.#els.btnReady.disabled = true;
+    }
   }
 
   #toggleDropdown(targetId) {
@@ -639,6 +675,11 @@ export class UIManager {
     els.btnPause.addEventListener('click', (e) => {
       e.currentTarget.blur();
       this.#handlers.onTogglePause();
+    });
+
+    els.btnReady.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      this.#handlers.onToggleReady?.();
     });
 
     els.btnLeave.addEventListener('click', (e) => {

@@ -4,6 +4,7 @@ export const MSG_TYPE = Object.freeze({
   HELLO: 'hello',
   PING: 'ping',
   PONG: 'pong',
+  READY: 'ready',
   PADDLE: 'p',
   PADDLE_COLOR: 'paddleColor',
   WIN_SOUND: 'winSound',
