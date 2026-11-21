@@ -15,8 +15,8 @@ export class EventEmitter {
 
   emit(event, payload) {
     const handlers = this.#listeners.get(event);
-    if (!handlers) return;
-    for (const handler of handlers) {
+    if (!handlers || handlers.size === 0) return;
+    for (const handler of [...handlers]) {
       handler(payload);
     }
   }

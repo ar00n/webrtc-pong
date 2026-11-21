@@ -1,7 +1,8 @@
 import { GAME_CONFIG } from '../config/constants.js';
 import { isEditableElement } from '../utils/dom.js';
 
-const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label, summary';
+const BLOCKED_SELECTOR =
+  'button, a, input, select, textarea, label, summary, .dropdown-popover, .ledger-panel';
 
 export class InputController {
   #canvas;
@@ -29,55 +30,66 @@ export class InputController {
     this.#abortController.abort();
   }
 
-  #isControlTarget(target) {
+  #isBlockedTarget(target) {
     return (
       target instanceof Element &&
-      (isEditableElement(target) || Boolean(target.closest(INTERACTIVE_SELECTOR)))
+      (isEditableElement(target) || Boolean(target.closest(BLOCKED_SELECTOR)))
     );
   }
 
   #bindEvents() {
     const { signal } = this.#abortController;
 
-    window.addEventListener('keydown', (e) => {
-      this.#handlers.onUserGesture?.();
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        this.#handlers.onUserGesture?.();
 
-      if (isEditableElement(document.activeElement)) return;
+        if (isEditableElement(document.activeElement)) return;
 
-      if (e.key === 'm' || e.key === 'M') {
-        if (!e.repeat) this.#handlers.onToggleMute?.();
-        return;
-      }
+        if (e.key === 'm' || e.key === 'M') {
+          if (!e.repeat) this.#handlers.onToggleMute?.();
+          return;
+        }
 
-      if (e.code === 'Space' || e.key === ' ') {
-        e.preventDefault();
-        if (!e.repeat) {
-          this.#handlers.onTogglePause?.()
-          this.#handlers.onToggleReady?.();
-        };
-        return;
-      }
+        if (e.code === 'Space' || e.key === ' ') {
+          e.preventDefault();
+          if (!e.repeat) {
+            this.#handlers.onSpacePress?.();
+          }
+          return;
+        }
 
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        e.preventDefault();
-      }
-      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
-        this.#keys.up = true;
-      }
-      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
-        this.#keys.down = true;
-      }
-    }, { signal });
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+        }
+        if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+          this.#keys.up = true;
+        }
+        if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+          this.#keys.down = true;
+        }
+      },
+      { signal }
+    );
 
-    window.addEventListener('keyup', (e) => {
-      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') this.#keys.up = false;
-      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') this.#keys.down = false;
-    }, { signal });
+    window.addEventListener(
+      'keyup',
+      (e) => {
+        if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') this.#keys.up = false;
+        if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') this.#keys.down = false;
+      },
+      { signal }
+    );
 
-    window.addEventListener('blur', () => {
-      this.resetKeys();
-      this.#pointerOnControl = false;
-    }, { signal });
+    window.addEventListener(
+      'blur',
+      () => {
+        this.resetKeys();
+        this.#pointerOnControl = false;
+      },
+      { signal }
+    );
 
     const clearControlDrag = () => {
       this.#pointerOnControl = false;
@@ -86,13 +98,13 @@ export class InputController {
     window.addEventListener('pointercancel', clearControlDrag, { signal });
 
     const handlePointer = (e) => {
-      const onControl = this.#isControlTarget(e.target);
+      const blocked = this.#isBlockedTarget(e.target);
 
       if (e.type === 'pointerdown') {
-        this.#pointerOnControl = onControl;
-        if (onControl) return;
+        this.#pointerOnControl = blocked;
+        if (blocked) return;
         this.#handlers.onUserGesture?.();
-      } else if (this.#pointerOnControl || onControl) {
+      } else if (this.#pointerOnControl || blocked) {
         return;
       }
 

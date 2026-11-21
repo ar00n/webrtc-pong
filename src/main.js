@@ -1,4 +1,9 @@
-import { PongApp } from './app/PongApp.js';
+import { mount } from 'svelte';
+import './styles/main.css';
+import App from './App.svelte';
 
-const app = new PongApp();
-app.start();
+const app = mount(App, {
+  target: document.getElementById('app')
+});
+
+export default app;

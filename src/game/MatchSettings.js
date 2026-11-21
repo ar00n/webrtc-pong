@@ -14,7 +14,8 @@ function clampNumber(value, min, max, fallback) {
 }
 
 export function resolvePaddleColor(idOrHex) {
-  const fallback = PADDLE_COLORS.find((c) => c.id === PADDLE_CONFIG.DEFAULT_COLOR_ID) || PADDLE_COLORS[0];
+  const fallback =
+    PADDLE_COLORS.find((c) => c.id === PADDLE_CONFIG.DEFAULT_COLOR_ID) || PADDLE_COLORS[0];
   if (typeof idOrHex !== 'string') return fallback;
   const normalized = idOrHex.trim().toLowerCase();
   return (
@@ -112,6 +113,20 @@ export function normalizeMatchSettings(raw = {}) {
   };
 }
 
+export function areMatchSettingsEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.difficulty === b.difficulty &&
+    a.initialBallSpeed === b.initialBallSpeed &&
+    a.maxBallSpeed === b.maxBallSpeed &&
+    a.speedMultiplier === b.speedMultiplier &&
+    a.mode === b.mode &&
+    a.targetScore === b.targetScore &&
+    a.timeLimitSec === b.timeLimitSec
+  );
+}
+
 export function evaluateMatchWinner(state, settings) {
   const hs = state.hostScore;
   const gs = state.guestScore;
@@ -160,7 +175,7 @@ export function formatDifficultySummary(settings) {
   const label =
     settings.difficulty === 'custom'
       ? 'Custom'
-      : (DIFFICULTY_PRESETS[settings.difficulty]?.label || 'Normal');
+      : DIFFICULTY_PRESETS[settings.difficulty]?.label || 'Normal';
   return `${label} (Max ${settings.maxBallSpeed} px/s, ${settings.speedMultiplier.toFixed(2)}×)`;
 }
 

@@ -63,18 +63,28 @@ export class NetworkManager extends EventEmitter {
     this.#roomCode = code;
     this.#isHost = hostMode;
 
-    const room = joinRoom(
-      { appId: getAppId(), maxUsers: NETWORK_CONFIG.MAX_USERS, identity: 'none' },
-      code
-    );
-    this.#room = room;
+    let room = null;
+    try {
+      room = joinRoom(
+        { appId: getAppId(), maxUsers: NETWORK_CONFIG.MAX_USERS, identity: 'none' },
+        code
+      );
+      this.#room = room;
 
-    const self = await room.getSelf();
-    // Guard against disconnect() having been called while awaiting getSelf()
-    if (this.#room !== room) return;
+      const self = await room.getSelf();
+      // Guard against disconnect() having been called while awaiting getSelf()
+      if (this.#room !== room) return;
 
-    this.#myUserId = self.userId;
-    this.#syncAction = room.makeAction('sync');
+      this.#myUserId = self.userId;
+      this.#syncAction = room.makeAction('sync');
+    } catch (err) {
+      if (this.#room === room) {
+        await this.disconnect();
+      } else if (room) {
+        room.leave().catch(() => {});
+      }
+      throw err;
+    }
 
     room.onUserJoin(({ userId }) => {
       if (this.#remoteUserId && this.#remoteUserId !== userId && !this.#connectionLost) {

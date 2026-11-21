@@ -13,9 +13,11 @@ export class Renderer {
   }
 
   render(state, view) {
+    if (!this.#ctx) return;
     this.#syncResolution();
     const ctx = this.#ctx;
-    const { WIDTH: W, HEIGHT: H, PADDLE_MARGIN, PADDLE_WIDTH, PADDLE_HEIGHT, BALL_RADIUS } = GAME_CONFIG;
+    const { WIDTH: W, HEIGHT: H, PADDLE_MARGIN, PADDLE_WIDTH, PADDLE_HEIGHT, BALL_RADIUS } =
+      GAME_CONFIG;
 
     // Background
     ctx.fillStyle = '#000';
@@ -110,6 +112,7 @@ export class Renderer {
   }
 
   #syncResolution() {
+    if (!this.#ctx) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const targetW = Math.round(GAME_CONFIG.WIDTH * dpr);
     const targetH = Math.round(GAME_CONFIG.HEIGHT * dpr);
@@ -118,7 +121,6 @@ export class Renderer {
       this.#dpr = dpr;
       this.#canvas.width = targetW;
       this.#canvas.height = targetH;
-      this.#canvas.style.width = `${GAME_CONFIG.WIDTH}px`;
     }
     this.#ctx.setTransform(this.#dpr, 0, 0, this.#dpr, 0, 0);
   }

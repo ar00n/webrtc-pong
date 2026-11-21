@@ -170,11 +170,7 @@ export class AudioEngine {
         : this.#selectedWinSoundId;
 
     const synth = this.#createSynthApi(ac);
-    return this.#winSoundFramework.play(
-      targetId,
-      synth,
-      AUDIO_CONFIG.DEFAULT_WIN_SOUND
-    );
+    return this.#winSoundFramework.play(targetId, synth, AUDIO_CONFIG.DEFAULT_WIN_SOUND);
   }
 
   playMatchLose() {
@@ -268,6 +264,11 @@ export class AudioEngine {
 
     osc.connect(env);
     env.connect(this.#masterGain);
+
+    osc.onended = () => {
+      osc.disconnect();
+      env.disconnect();
+    };
 
     osc.start(t0);
     osc.stop(t1 + 0.01);

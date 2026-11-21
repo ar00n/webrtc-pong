@@ -189,13 +189,13 @@ canvas {
   align-items: center;
 }
 
-.join-group #joinCodeInput {
+.join-group .join-code-input {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
   border-right: none;
 }
 
-.join-group #btnJoin {
+.join-group .join-btn {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
   height: 34px;
@@ -407,7 +407,7 @@ canvas {
   align-items: stretch;
 }
 
-.audio-split #btnMute {
+.audio-split .mute-btn {
   height: 30px;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
@@ -427,7 +427,7 @@ canvas {
   margin-left: auto;
 }
 
-.profile-group #btnToggleLedger {
+.profile-group .ledger-toggle-btn {
   height: 30px;
 }
 
@@ -759,7 +759,7 @@ input[type="text"] {
   height: 34px;
 }
 
-#joinCodeInput {
+.join-code-input {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 14px;
   font-weight: 600;
@@ -769,12 +769,12 @@ input[type="text"] {
   width: 132px;
 }
 
-#joinCodeInput::placeholder {
+.join-code-input::placeholder {
   letter-spacing: 2px;
   color: #64748b;
 }
 
-#nicknameInput {
+.nickname-input {
   width: 150px;
   height: 30px;
   padding: 4px 9px;
@@ -884,7 +884,7 @@ input[type="range"]::-moz-range-thumb {
   border-color: var(--border-subtle);
 }
 
-#btnTrustOpponent.active {
+.trust-opponent-btn.active {
   background: rgba(74, 222, 128, 0.14);
   border-color: rgba(74, 222, 128, 0.5);
   color: var(--accent-green-light);
@@ -915,7 +915,7 @@ input[type="range"]::-moz-range-thumb {
   resize: vertical;
 }
 
-#backupFeedback {
+.backup-feedback {
   margin: 0;
   font-size: 12px;
 }
@@ -1034,7 +1034,7 @@ input[type="range"]::-moz-range-thumb {
     margin-left: 0;
   }
 
-  #joinCodeInput {
+  .join-code-input {
     width: 112px;
   }
 }
